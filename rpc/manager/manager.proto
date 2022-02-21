@@ -242,6 +242,17 @@ message CreateInterceptRequest {
   string api_key = 3;
 }
 
+message PreparedIntercept {
+  string error = 1;
+  string namespace = 2;
+  string serviceUid = 3;
+  string serviceName = 4;
+  string servicePortName = 5;
+  int32 servicePort = 6;
+  string workloadKind = 7;
+  string agentImage = 8;
+}
+
 message UpdateInterceptRequest {
   SessionInfo session = 1;
   string name = 2;
@@ -292,6 +303,11 @@ message ReviewInterceptRequest {
 message RemainRequest {
   SessionInfo session = 1;
   string api_key = 2;
+}
+
+message AgentsConfigMapRequest {
+  SessionInfo session = 1;
+  string namespace = 2;
 }
 
 message LogLevelRequest {
@@ -487,6 +503,10 @@ service Manager {
   rpc WatchClusterInfo(SessionInfo) returns (stream ClusterInfo);
 
   // CRUD
+
+  // Request that the traffic-manager makes the preparations necessary to
+  // create the given intercept.
+  rpc PrepareIntercept(CreateInterceptRequest) returns (PreparedIntercept);
 
   // CreateIntercept lets a client create an intercept.  It will be
   // created in the "WATING" disposition, and it will remain in that

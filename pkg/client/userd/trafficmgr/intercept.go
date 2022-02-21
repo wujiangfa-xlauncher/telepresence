@@ -20,6 +20,7 @@ import (
 	grpcStatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	empty "google.golang.org/protobuf/types/known/emptypb"
+	core "k8s.io/api/core/v1"
 	errors2 "k8s.io/apimachinery/pkg/api/errors"
 
 	"github.com/datawire/dlib/dcontext"
@@ -29,6 +30,7 @@ import (
 	"github.com/datawire/dlib/dtime"
 	rpc "github.com/telepresenceio/telepresence/rpc/v2/connector"
 	"github.com/telepresenceio/telepresence/rpc/v2/manager"
+	"github.com/telepresenceio/telepresence/rpc/v2/userdaemon"
 	"github.com/telepresenceio/telepresence/v2/pkg/a8rcloud"
 	"github.com/telepresenceio/telepresence/v2/pkg/client"
 	"github.com/telepresenceio/telepresence/v2/pkg/client/errcat"
@@ -79,7 +81,7 @@ func newPortForwards() *livePortForwards {
 	return &livePortForwards{live: make(map[forwardKey]*livePortForward)}
 }
 
-// start starts a port forward for the given intercept and remembers that it's alive
+// start a port forward for the given intercept and remembers that it's alive
 func (lpf livePortForwards) start(ctx context.Context, tm *TrafficManager, ii *manager.InterceptInfo) {
 	fk := forwardKey{
 		Name:  ii.Spec.Name,
@@ -200,14 +202,18 @@ func (tm *TrafficManager) workerPortForwardIntercepts(ctx context.Context) error
 				}
 
 				// Notify waiters for active intercepts
-				if chUt, loaded := tm.activeInterceptsWaiters.LoadAndDelete(intercept.Spec.Name); loaded {
+				if chUt, loaded := tm.activeInterceptsWaiters.Load(intercept.Spec.Name); loaded {
 					if ch, ok := chUt.(chan interceptResult); ok {
 						dlog.Debugf(ctx, "wait status: intercept id=%q is no longer WAITING; is now %v", intercept.Id, intercept.Disposition)
-						ch <- interceptResult{
+						ir := interceptResult{
 							intercept: intercept,
 							err:       iceptError,
 						}
-						close(ch)
+						select {
+						case ch <- ir:
+						default:
+							// Channel was closed
+						}
 					}
 				}
 				if iceptError == nil {
@@ -274,61 +280,141 @@ func interceptError(tp rpc.InterceptError, err error) *rpc.InterceptResult {
 	}
 }
 
+type serviceProps struct {
+	// Information provided by the traffic manager as response to the PrepareIntercept call
+	preparedIntercept *manager.PreparedIntercept
+
+	// Fields below are all deprecated and only used with traffic-manager < 2.6.0
+	// Deprecated
+	service *core.Service
+	// Deprecated
+	servicePort *core.ServicePort
+	// Deprecated
+	workload k8sapi.Workload
+	// Deprecated
+	container *core.Container
+	// Deprecated
+	containerPortIndex int
+}
+
+func (s *serviceProps) interceptResult() *rpc.InterceptResult {
+	if s.preparedIntercept != nil {
+		return &rpc.InterceptResult{
+			ServiceUid:   s.preparedIntercept.ServiceUid,
+			WorkloadKind: s.preparedIntercept.WorkloadKind,
+			ServiceProps: &userdaemon.IngressInfoRequest{
+				ServiceUid:            s.preparedIntercept.ServiceUid,
+				ServiceName:           s.preparedIntercept.ServiceName,
+				ServicePortIdentifier: s.preparedIntercept.ServicePortName,
+				ServicePort:           s.preparedIntercept.ServicePort,
+				Namespace:             s.preparedIntercept.Namespace,
+			},
+		}
+	}
+	return &rpc.InterceptResult{
+		ServiceUid:   string(s.service.UID),
+		WorkloadKind: s.workload.GetKind(),
+		ServiceProps: &userdaemon.IngressInfoRequest{
+			ServiceUid:            string(s.service.UID),
+			ServiceName:           s.service.Name,
+			ServicePortIdentifier: s.servicePort.Name,
+			ServicePort:           s.servicePort.Port,
+			Namespace:             s.service.Namespace,
+		},
+	}
+}
+
+func imageVersion(image string) *semver.Version {
+	if cp := strings.LastIndexByte(image, ':'); cp > 0 {
+		if v, err := semver.Parse(image[cp+1:]); err == nil {
+			return &v
+		}
+	}
+	return nil
+}
+
 // CanIntercept checks if it is possible to create an intercept for the given request. The intercept can proceed
 // only if the returned rpc.InterceptResult is nil. The returned runtime.Object is either nil, indicating a local
 // intercept, or the workload for the intercept.
-func (tm *TrafficManager) CanIntercept(c context.Context, ir *rpc.CreateInterceptRequest) (*rpc.InterceptResult, k8sapi.Workload, *ServiceProps) {
+func (tm *TrafficManager) CanIntercept(c context.Context, ir *rpc.CreateInterceptRequest) (*serviceProps, *rpc.InterceptResult) {
 	tm.WaitForNSSync(c)
 	tm.wlWatcher.waitForSync(c)
 	spec := ir.Spec
 	spec.Namespace = tm.ActualNamespace(spec.Namespace)
 	if spec.Namespace == "" {
 		// namespace is not currently mapped
-		return interceptError(rpc.InterceptError_NO_ACCEPTABLE_WORKLOAD, errcat.User.Newf(ir.Spec.Agent)), nil, nil
+		return nil, interceptError(rpc.InterceptError_NO_ACCEPTABLE_WORKLOAD, errcat.User.Newf(ir.Spec.Agent))
 	}
 
 	if _, inUse := tm.localIntercepts[spec.Name]; inUse {
-		return interceptError(rpc.InterceptError_ALREADY_EXISTS, errcat.User.Newf(spec.Name)), nil, nil
+		return nil, interceptError(rpc.InterceptError_ALREADY_EXISTS, errcat.User.Newf(spec.Name))
 	}
 
 	for _, iCept := range tm.getCurrentIntercepts() {
 		if iCept.Spec.Name == spec.Name {
-			return interceptError(rpc.InterceptError_ALREADY_EXISTS, errcat.User.Newf(spec.Name)), nil, nil
+			return nil, interceptError(rpc.InterceptError_ALREADY_EXISTS, errcat.User.Newf(spec.Name))
 		}
 		if iCept.Spec.TargetPort == spec.TargetPort && iCept.Spec.TargetHost == spec.TargetHost {
-			return &rpc.InterceptResult{
+			return nil, &rpc.InterceptResult{
 				Error:         rpc.InterceptError_LOCAL_TARGET_IN_USE,
 				ErrorText:     spec.Name,
 				ErrorCategory: int32(errcat.User),
 				InterceptInfo: iCept,
-			}, nil, nil
+			}
 		}
 	}
 	if spec.Agent == "" {
-		return nil, nil, nil
+		return nil, nil
 	}
 
-	obj, err := k8sapi.GetWorkload(c, spec.Agent, spec.Namespace, spec.WorkloadKind)
+	if tm.managerVersion.LT(semver.MustParse("2.6.0-alpha.40")) { // TODO: Change to released version
+		// fall back traffic-manager behaviour prior to 2.6
+		return legacyCanInterceptEpilog(c, ir)
+	}
+
+	pi, err := tm.managerClient.PrepareIntercept(c, &manager.CreateInterceptRequest{
+		Session:       tm.session(),
+		InterceptSpec: spec,
+	})
+	if err != nil {
+		return nil, interceptError(rpc.InterceptError_TRAFFIC_MANAGER_ERROR, err)
+	}
+	if pi.Error != "" {
+		return nil, interceptError(rpc.InterceptError_TRAFFIC_MANAGER_ERROR, errcat.User.Newf(pi.Error))
+	}
+
+	// Verify that the receiving agent can handle the mechanism arguments that are passed to it.
+	if spec.Mechanism == "http" {
+		if ir.Spec.MechanismArgs, err = makeFlagsCompatible(imageVersion(pi.AgentImage), ir.Spec.MechanismArgs); err != nil {
+			return nil, interceptError(rpc.InterceptError_UNKNOWN_FLAG, err)
+		}
+		dlog.Debugf(c, "Using %s flags %v", ir.Spec.Mechanism, ir.Spec.MechanismArgs)
+	}
+	return &serviceProps{preparedIntercept: pi}, nil
+}
+
+func legacyCanInterceptEpilog(c context.Context, ir *rpc.CreateInterceptRequest) (*serviceProps, *rpc.InterceptResult) {
+	spec := ir.Spec
+	wl, err := k8sapi.GetWorkload(c, spec.Agent, spec.Namespace, spec.WorkloadKind)
 	if err != nil {
 		if errors2.IsNotFound(err) {
-			return interceptError(rpc.InterceptError_NO_ACCEPTABLE_WORKLOAD, errcat.User.Newf(spec.Name)), nil, nil
+			return nil, interceptError(rpc.InterceptError_NO_ACCEPTABLE_WORKLOAD, errcat.User.Newf(spec.Name))
 		}
-		return &rpc.InterceptResult{
-			Error:     rpc.InterceptError_TRAFFIC_MANAGER_ERROR,
-			ErrorText: err.Error(),
-		}, nil, nil
-	}
-	podTpl := obj.GetPodTemplate()
-
-	// Check if the workload is auto installed. This also verifies annotation consistency
-	autoInstall, err := useAutoInstall(podTpl)
-	if err != nil {
-		return interceptError(rpc.InterceptError_MISCONFIGURED_WORKLOAD, errcat.User.New(err)), nil, nil
+		err = fmt.Errorf("failed to get workload %s.%s: %w", spec.Agent, spec.Namespace, err)
+		dlog.Error(c, err)
+		return nil, interceptError(rpc.InterceptError_TRAFFIC_MANAGER_ERROR, err)
 	}
 
 	// Verify that the receiving agent can handle the mechanism arguments that are passed to it.
 	if spec.Mechanism == "http" {
 		var agentVer *semver.Version
+		podTpl := wl.GetPodTemplate()
+
+		// Check if the workload is auto installed. This also verifies annotation consistency
+		autoInstall, err := useAutoInstall(podTpl)
+		if err != nil {
+			return nil, interceptError(rpc.InterceptError_MISCONFIGURED_WORKLOAD, errcat.User.New(err))
+		}
 		for i := range podTpl.Spec.Containers {
 			if ct := &podTpl.Spec.Containers[i]; ct.Name == install.AgentContainerName {
 				image := ct.Image
@@ -336,27 +422,21 @@ func (tm *TrafficManager) CanIntercept(c context.Context, ir *rpc.CreateIntercep
 					// Image will be updated to the specified image unless they are equal
 					image = ir.AgentImage
 				}
-				if cp := strings.LastIndexByte(image, ':'); cp > 0 {
-					if v, err := semver.Parse(image[cp+1:]); err == nil {
-						agentVer = &v
-					}
-				}
+				agentVer = imageVersion(image)
 				break
 			}
 		}
-		if ir.Spec.MechanismArgs, err = makeFlagsCompatible(agentVer, ir.Spec.MechanismArgs); err != nil {
-			return interceptError(rpc.InterceptError_UNKNOWN_FLAG, err), nil, nil
+		if spec.MechanismArgs, err = makeFlagsCompatible(agentVer, spec.MechanismArgs); err != nil {
+			return nil, interceptError(rpc.InterceptError_UNKNOWN_FLAG, err)
 		}
-		dlog.Debugf(c, "Using %s flags %v", ir.Spec.Mechanism, ir.Spec.MechanismArgs)
+		dlog.Debugf(c, "Using %s flags %v", spec.Mechanism, spec.MechanismArgs)
 	}
 
-	svcprops, err := exploreSvc(c, spec.ServicePortIdentifier, spec.ServiceName, obj)
+	svcProps, err := exploreSvc(c, spec.ServicePortIdentifier, spec.ServiceName, wl)
 	if err != nil {
-		// Intercept is not established here, so I am not sure this is still the right error type
-		return interceptError(rpc.InterceptError_FAILED_TO_ESTABLISH, err), nil, nil
+		return nil, interceptError(rpc.InterceptError_FAILED_TO_ESTABLISH, err)
 	}
-
-	return nil, obj, svcprops
+	return svcProps, nil
 }
 
 func makeFlagsCompatible(agentVer *semver.Version, args []string) ([]string, error) {
@@ -425,14 +505,15 @@ func makeFlagsCompatible(agentVer *semver.Version, args []string) ([]string, err
 }
 
 // AddIntercept adds one intercept
-func (tm *TrafficManager) AddIntercept(c context.Context, ir *rpc.CreateInterceptRequest) (*rpc.InterceptResult, error) {
-	result, wl, svcprops := tm.CanIntercept(c, ir)
+func (tm *TrafficManager) AddIntercept(c context.Context, ir *rpc.CreateInterceptRequest) (result *rpc.InterceptResult, err error) {
+	var svcProps *serviceProps
+	svcProps, result = tm.CanIntercept(c, ir)
 	if result != nil {
 		return result, nil
 	}
 
 	spec := ir.Spec
-	if wl == nil {
+	if svcProps == nil {
 		return tm.AddLocalOnlyIntercept(c, spec)
 	}
 
@@ -445,8 +526,8 @@ func (tm *TrafficManager) AddIntercept(c context.Context, ir *rpc.CreateIntercep
 	apiPort := uint16(cfg.TelepresenceAPI.Port)
 	if apiPort == 0 {
 		// Default to the API port declared by the traffic-manager
-		apiInfo, err := tm.managerClient.GetTelepresenceAPI(c, &empty.Empty{})
-		if err != nil {
+		var apiInfo *manager.TelepresenceAPIInfo
+		if apiInfo, err = tm.managerClient.GetTelepresenceAPI(c, &empty.Empty{}); err != nil {
 			// Traffic manager is probably outdated. Not fatal, but deserves to be logged
 			dlog.Errorf(c, "failed to obtain Telepresence API info from traffic manager: %v", err)
 		} else {
@@ -454,11 +535,15 @@ func (tm *TrafficManager) AddIntercept(c context.Context, ir *rpc.CreateIntercep
 		}
 	}
 
-	// It's OK to just call addAgent every time; if the agent is already installed then it's a
-	// no-op.
-	result = tm.addAgent(c, wl, svcprops, ir.AgentImage, apiPort)
-	if result.Error != rpc.InterceptError_UNSPECIFIED {
-		return result, nil
+	if svcProps.preparedIntercept == nil {
+		// It's OK to just call addAgent every time; if the agent is already installed then it's a
+		// no-op.
+		result = tm.addAgent(c, svcProps, ir.AgentImage, apiPort)
+		if result.Error != rpc.InterceptError_UNSPECIFIED {
+			return result, nil
+		}
+	} else {
+		result = svcProps.interceptResult()
 	}
 
 	spec.ServiceUid = result.ServiceUid
@@ -481,8 +566,8 @@ func (tm *TrafficManager) AddIntercept(c context.Context, ir *rpc.CreateIntercep
 		}()
 	}
 
-	apiKey, err := tm.getCloudAPIKey(c, a8rcloud.KeyDescAgent(spec), false)
-	if err != nil {
+	var apiKey string
+	if apiKey, err = tm.getCloudAPIKey(c, a8rcloud.KeyDescAgent(spec), false); err != nil {
 		if !errors.Is(err, auth.ErrNotLoggedIn) {
 			dlog.Errorf(c, "error getting apiKey for agent: %s", err)
 		}
@@ -498,9 +583,14 @@ func (tm *TrafficManager) AddIntercept(c context.Context, ir *rpc.CreateIntercep
 	// should become active within a few seconds.
 	waitCh := make(chan interceptResult)
 	tm.activeInterceptsWaiters.Store(spec.Name, waitCh)
-	defer tm.activeInterceptsWaiters.Delete(spec.Name)
+	defer func() {
+		if wc, loaded := tm.activeInterceptsWaiters.LoadAndDelete(spec.Name); loaded {
+			close(wc.(chan interceptResult))
+		}
+	}()
 
-	ii, err := tm.managerClient.CreateIntercept(c, &manager.CreateInterceptRequest{
+	var ii *manager.InterceptInfo
+	ii, err = tm.managerClient.CreateIntercept(c, &manager.CreateInterceptRequest{
 		Session:       tm.session(),
 		InterceptSpec: spec,
 		ApiKey:        apiKey,
@@ -508,29 +598,55 @@ func (tm *TrafficManager) AddIntercept(c context.Context, ir *rpc.CreateIntercep
 	if err != nil {
 		dlog.Debugf(c, "manager responded to CreateIntercept with error %v", err)
 		err = client.CheckTimeout(c, err)
-		return &rpc.InterceptResult{Error: rpc.InterceptError_TRAFFIC_MANAGER_ERROR, ErrorText: err.Error()}, nil
+		code := grpcCodes.Internal
+		if errors.Is(err, context.DeadlineExceeded) {
+			code = grpcCodes.DeadlineExceeded
+		} else if errors.Is(err, context.Canceled) {
+			code = grpcCodes.Canceled
+		}
+		return nil, grpcStatus.Error(code, err.Error())
 	}
 	dlog.Debugf(c, "created intercept %s", ii.Spec.Name)
 
-	select {
-	case <-c.Done():
-		return interceptError(rpc.InterceptError_FAILED_TO_ESTABLISH, c.Err()), nil
-	case wr := <-waitCh:
-		ii = wr.intercept
-		if wr.err != nil {
-			dlog.Debugf(c, "intercept %s failed to create, will remove...", wr.intercept.Spec.Name)
-			err := tm.RemoveIntercept(c, wr.intercept.Spec.Name)
-			if err != nil {
-				dlog.Warnf(c, "failed to remove failed intercept %s: %v", wr.intercept.Spec.Namespace, err)
+	defer func() {
+		if err != nil {
+			dlog.Debugf(c, "intercept %s failed to create, will remove...", ii.Spec.Name)
+
+			// Make an attempt to remove the created intercept using a time limited Context. Our
+			// context is already done.
+			rc, cancel := context.WithTimeout(dcontext.WithoutCancel(c), 5*time.Second)
+			defer cancel()
+			if removeErr := tm.RemoveIntercept(rc, ii.Spec.Name); removeErr != nil {
+				dlog.Warnf(c, "failed to remove failed intercept %s: %v", ii.Spec.Name, removeErr)
 			}
-			return interceptError(rpc.InterceptError_FAILED_TO_ESTABLISH, wr.err), nil
 		}
-		result.InterceptInfo = wr.intercept
-		if ir.MountPoint != "" && ii.SftpPort > 0 {
-			deleteMount = false // Mount-point is busy until intercept ends
-			ii.ClientMountPoint = ir.MountPoint
+	}()
+
+	// Wait for the intercept to transition from WAITING or NO_AGENT to ACTIVE. This
+	// might result in more than one event.
+	for {
+		select {
+		case <-c.Done():
+			err = client.CheckTimeout(c, c.Err())
+			code := grpcCodes.Canceled
+			if errors.Is(err, context.DeadlineExceeded) {
+				code = grpcCodes.DeadlineExceeded
+			}
+			err = grpcStatus.Error(code, err.Error())
+			return nil, err
+		case wr := <-waitCh:
+			if wr.err != nil {
+				dlog.Warn(c, wr.err)
+				continue
+			}
+			ii = wr.intercept
+			result.InterceptInfo = wr.intercept
+			if ir.MountPoint != "" && ii.SftpPort > 0 {
+				deleteMount = false // Mount-point is busy until intercept ends
+				ii.ClientMountPoint = ir.MountPoint
+			}
+			return result, nil
 		}
-		return result, nil
 	}
 }
 

@@ -32,7 +32,7 @@ func (a wrapFs) Open(name string) (dos.File, error) {
 	return wrapFile(a.Fs.Open(name))
 }
 
-func (a wrapFs) OpenFile(name string, flag int, perm os.FileMode) (dos.File, error) {
+func (a wrapFs) OpenFile(name string, flag int, perm fs.FileMode) (dos.File, error) {
 	return wrapFile(a.Fs.OpenFile(name, flag, perm))
 }
 
@@ -61,11 +61,11 @@ func (a file) ReadDir(count int) ([]fs.DirEntry, error) {
 	if d, ok := a.File.(fs.ReadDirFile); ok {
 		return d.ReadDir(count)
 	}
-	fis, err := a.File.Readdir(count)
+	fis, err := a.File.Readdir(count) //nolint:forbidigo // this is not an os.File
 	if err != nil {
 		return nil, err
 	}
-	des := make([]os.DirEntry, len(fis))
+	des := make([]fs.DirEntry, len(fis))
 	for i, fi := range fis {
 		des[i] = dirEntry{fi}
 	}

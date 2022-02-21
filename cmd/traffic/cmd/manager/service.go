@@ -17,7 +17,7 @@ import (
 	"google.golang.org/grpc/status"
 	empty "google.golang.org/protobuf/types/known/emptypb"
 	"gopkg.in/yaml.v3"
-	corev1 "k8s.io/api/core/v1"
+	core "k8s.io/api/core/v1"
 
 	"github.com/datawire/dlib/dlog"
 	rpc "github.com/telepresenceio/telepresence/rpc/v2/manager"
@@ -226,50 +226,46 @@ func (m *Manager) WatchIntercepts(session *rpc.SessionInfo, stream rpc.Manager_W
 
 	dlog.Debug(ctx, "WatchIntercepts called")
 
+	var sessionDone <-chan struct{}
 	var filter func(id string, info *rpc.InterceptInfo) bool
 	if sessionID == "" {
 		// No sessonID; watch everything
 		filter = func(id string, info *rpc.InterceptInfo) bool {
 			return true
 		}
-	} else if agent := m.state.GetAgent(sessionID); agent != nil {
-		// sessionID refers to an agent session
-		filter = func(id string, info *rpc.InterceptInfo) bool {
-			// Don't return intercepts for different agents.
-			if info.Spec.Namespace != agent.Namespace || info.Spec.Agent != agent.Name {
-				dlog.Debugf(ctx, "Intercept mismatch: %s.%s != %s.%s", info.Spec.Agent, info.Spec.Namespace, agent.Name, agent.Namespace)
-				return false
-			}
-			// Don't return intercepts that aren't in a "agent-owned" state.
-			switch info.Disposition {
-			case rpc.InterceptDispositionType_WAITING,
-				rpc.InterceptDispositionType_ACTIVE,
-				rpc.InterceptDispositionType_AGENT_ERROR:
-				// agent-owned state: include the intercept
-				dlog.Debugf(ctx, "Intercept %s.%s valid. Disposition: %s", info.Spec.Agent, info.Spec.Namespace, info.Disposition)
-				return true
-			default:
-				// otherwise: don't return this intercept
-				dlog.Debugf(ctx, "Intercept %s.%s is not in agent-owned state. Disposition: %s", info.Spec.Agent, info.Spec.Namespace, info.Disposition)
-				return false
-			}
-		}
-	} else {
-		// sessionID refers to a client session
-		filter = func(id string, info *rpc.InterceptInfo) bool {
-			return info.ClientSession.SessionId == sessionID
-		}
-	}
-
-	var sessionDone <-chan struct{}
-	if sessionID == "" {
-		ch := make(chan struct{})
-		defer close(ch)
-		sessionDone = ch
 	} else {
 		var err error
 		if sessionDone, err = m.state.SessionDone(sessionID); err != nil {
 			return err
+		}
+
+		if agent := m.state.GetAgent(sessionID); agent != nil {
+			// sessionID refers to an agent session
+			filter = func(id string, info *rpc.InterceptInfo) bool {
+				// Don't return intercepts for different agents.
+				if info.Spec.Namespace != agent.Namespace || info.Spec.Agent != agent.Name {
+					dlog.Debugf(ctx, "Intercept mismatch: %s.%s != %s.%s", info.Spec.Agent, info.Spec.Namespace, agent.Name, agent.Namespace)
+					return false
+				}
+				// Don't return intercepts that aren't in a "agent-owned" state.
+				switch info.Disposition {
+				case rpc.InterceptDispositionType_WAITING,
+					rpc.InterceptDispositionType_ACTIVE,
+					rpc.InterceptDispositionType_AGENT_ERROR:
+					// agent-owned state: include the intercept
+					dlog.Debugf(ctx, "Intercept %s.%s valid. Disposition: %s", info.Spec.Agent, info.Spec.Namespace, info.Disposition)
+					return true
+				default:
+					// otherwise: don't return this intercept
+					dlog.Debugf(ctx, "Intercept %s.%s is not in agent-owned state. Disposition: %s", info.Spec.Agent, info.Spec.Namespace, info.Disposition)
+					return false
+				}
+			}
+		} else {
+			// sessionID refers to a client session
+			filter = func(id string, info *rpc.InterceptInfo) bool {
+				return info.ClientSession.SessionId == sessionID
+			}
 		}
 	}
 
@@ -296,6 +292,9 @@ func (m *Manager) WatchIntercepts(session *rpc.SessionInfo, stream rpc.Manager_W
 				dlog.Debugf(ctx, "WatchIntercepts encountered a write error: %v", err)
 				return err
 			}
+		case <-ctx.Done():
+			dlog.Debugf(ctx, "WatchIntercepts context cancelled")
+			return nil
 		case <-sessionDone:
 			dlog.Debugf(ctx, "WatchIntercepts session cancelled")
 			return nil
@@ -634,14 +633,14 @@ func (m *Manager) GetLogs(ctx context.Context, request *rpc.GetLogsRequest) (*rp
 	// instead return the error in the map, instead of the log, so that:
 	// - one failure doesn't prevent us from getting logs from other pods
 	// - it is easy to figure out why gettings logs for a given pod failed
-	getPodLogs := func(pods []*corev1.Pod, container string) {
+	getPodLogs := func(pods []*core.Pod, container string) {
 		wg := sync.WaitGroup{}
 		logWriteMutex := &sync.Mutex{}
 		wg.Add(len(pods))
 		for _, pod := range pods {
-			go func(pod *corev1.Pod) {
+			go func(pod *core.Pod) {
 				defer wg.Done()
-				plo := &corev1.PodLogOptions{
+				plo := &core.PodLogOptions{
 					Container: container,
 				}
 				// Since the same named workload could exist in multiple namespaces
@@ -728,6 +727,12 @@ func (m *Manager) WatchClusterInfo(session *rpc.SessionInfo, stream rpc.Manager_
 	ctx := managerutil.WithSessionInfo(stream.Context(), session)
 	dlog.Debugf(ctx, "WatchClusterInfo called")
 	return m.clusterInfo.Watch(ctx, stream)
+}
+
+func (m *Manager) PrepareIntercept(ctx context.Context, request *rpc.CreateInterceptRequest) (*rpc.PreparedIntercept, error) {
+	ctx = managerutil.WithSessionInfo(ctx, request.Session)
+	dlog.Debugf(ctx, "CreateAgentsConfigMap called")
+	return state.PrepareIntercept(ctx, request)
 }
 
 // expire removes stale sessions.

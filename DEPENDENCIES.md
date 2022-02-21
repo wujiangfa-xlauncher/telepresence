@@ -4,7 +4,7 @@ following Free and Open Source software:
     Name                                                                Version                                    License(s)
     ----                                                                -------                                    ----------
     the Go language standard library ("std")                            v1.17                                      3-clause BSD license
-    cloud.google.com/go                                                 v0.54.0                                    Apache License 2.0
+    cloud.google.com/go                                                 v0.75.0                                    Apache License 2.0
     github.com/Azure/go-ansiterm                                        v0.0.0-20170929234023-d6e3b3328b78         MIT license
     github.com/Azure/go-autorest                                        v14.2.0+incompatible                       Apache License 2.0
     github.com/Azure/go-autorest/autorest                               v0.11.12                                   Apache License 2.0
@@ -113,6 +113,7 @@ following Free and Open Source software:
     github.com/sethvargo/go-envconfig                                   v0.3.2                                     Apache License 2.0
     github.com/shopspring/decimal                                       v1.2.0                                     MIT license
     github.com/sirupsen/logrus                                          v1.8.1                                     MIT license
+    github.com/spf13/afero                                              v1.8.2                                     Apache License 2.0
     github.com/spf13/cast                                               v1.3.1                                     MIT license
     github.com/spf13/cobra                                              v1.1.3                                     Apache License 2.0
     github.com/spf13/pflag                                              v1.0.5                                     3-clause BSD license
@@ -122,12 +123,12 @@ following Free and Open Source software:
     github.com/xeipuuv/gojsonreference                                  v0.0.0-20180127040603-bd5ef7bd5415         Apache License 2.0
     github.com/xeipuuv/gojsonschema                                     v1.2.0                                     Apache License 2.0
     github.com/xlab/treeprint                                           v0.0.0-20181112141820-a009c3971eca         MIT license
-    go.opencensus.io                                                    v0.22.3                                    Apache License 2.0
+    go.opencensus.io                                                    v0.22.5                                    Apache License 2.0
     go.starlark.net                                                     v0.0.0-20200306205701-8dd3e2ee1dd5         3-clause BSD license
-    golang.org/x/crypto                                                 v0.0.0-20210421170649-83a5a9bb288b         3-clause BSD license
+    golang.org/x/crypto                                                 v0.0.0-20211108221036-ceb1ce70b4fa         3-clause BSD license
     golang.org/x/mod                                                    v0.4.2                                     3-clause BSD license
     golang.org/x/net                                                    v0.0.0-20210805182204-aaa1db679c0d         3-clause BSD license
-    golang.org/x/oauth2                                                 v0.0.0-20200107190931-bf48bf16ab8d         3-clause BSD license
+    golang.org/x/oauth2                                                 v0.0.0-20210218202405-ba52d332ba99         3-clause BSD license
     golang.org/x/sync                                                   v0.0.0-20210220032951-036812b2e83c         3-clause BSD license
     golang.org/x/sys                                                    v0.0.0-20210630005230-0f9fa26af87c         3-clause BSD license
     golang.org/x/term                                                   v0.0.0-20210220032956-6a3ed077a48d         3-clause BSD license
@@ -138,7 +139,7 @@ following Free and Open Source software:
     golang.zx2c4.com/wireguard                                          v0.0.0-20210427022245-097af6e1351b         MIT license
     golang.zx2c4.com/wireguard/windows                                  v0.3.11                                    MIT license
     google.golang.org/appengine                                         v1.6.7                                     Apache License 2.0
-    google.golang.org/genproto                                          v0.0.0-20201110150050-8816d57aaa9a         Apache License 2.0
+    google.golang.org/genproto                                          v0.0.0-20210226172003-ab064af71705         Apache License 2.0
     github.com/datawire/grpc-go (modified from google.golang.org/grpc)  v1.38.0-dev.0.20210626184227-5ef87f395316  Apache License 2.0
     google.golang.org/protobuf                                          v1.25.0                                    3-clause BSD license
     gopkg.in/gorp.v1                                                    v1.7.2                                     MIT license

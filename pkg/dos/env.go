@@ -6,10 +6,11 @@ import (
 	"sort"
 )
 
+// Env is an abstraction of the environment related functions with the same name in the os package.
 type Env interface {
 	Environ() []string
-	Get(string) string
-	Set(string, string) error
+	Getenv(string) string
+	Setenv(string, string) error
 	Lookup(string) (string, bool)
 }
 
@@ -29,11 +30,11 @@ func (e MapEnv) Environ() []string {
 	return ks
 }
 
-func (e MapEnv) Get(key string) string {
+func (e MapEnv) Getenv(key string) string {
 	return e[key]
 }
 
-func (e MapEnv) Set(key, value string) error {
+func (e MapEnv) Setenv(key, value string) error {
 	e[key] = value
 	return nil
 }
@@ -63,11 +64,11 @@ func Environ(ctx context.Context) []string {
 }
 
 func Getenv(ctx context.Context, key string) string {
-	return EnvAPI(ctx).Get(key)
+	return EnvAPI(ctx).Getenv(key)
 }
 
 func Setenv(ctx context.Context, key, value string) error {
-	return EnvAPI(ctx).Set(key, value)
+	return EnvAPI(ctx).Setenv(key, value)
 }
 
 func LookupEnv(ctx context.Context, key string) (string, bool) {
@@ -80,11 +81,11 @@ func (osEnv) Environ() []string {
 	return os.Environ()
 }
 
-func (osEnv) Get(s string) string {
+func (osEnv) Getenv(s string) string {
 	return os.Getenv(s)
 }
 
-func (osEnv) Set(key, value string) error {
+func (osEnv) Setenv(key, value string) error {
 	return os.Setenv(key, value)
 }
 

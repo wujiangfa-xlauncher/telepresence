@@ -3,6 +3,7 @@ package dos
 import (
 	"context"
 	"io"
+	"io/fs"
 	"os"
 )
 
@@ -16,22 +17,22 @@ type File interface {
 	io.WriterAt
 
 	Name() string
-	Readdir(count int) ([]os.FileInfo, error)
+	Readdir(count int) ([]fs.FileInfo, error)
 	Readdirnames(n int) ([]string, error)
-	Stat() (os.FileInfo, error)
+	Stat() (fs.FileInfo, error)
 	Sync() error
 	Truncate(size int64) error
 	WriteString(s string) (ret int, err error)
-	ReadDir(count int) ([]os.DirEntry, error)
+	ReadDir(count int) ([]fs.DirEntry, error)
 }
 
 // FileSystem is an interface that implements functions in the os package
 type FileSystem interface {
 	Create(name string) (File, error)
-	MkdirAll(path string, perm os.FileMode) error
+	MkdirAll(path string, perm fs.FileMode) error
 	Open(name string) (File, error)
-	OpenFile(name string, flag int, perm os.FileMode) (File, error)
-	Stat(name string) (os.FileInfo, error)
+	OpenFile(name string, flag int, perm fs.FileMode) (File, error)
+	Stat(name string) (fs.FileInfo, error)
 	Symlink(oldName, newName string) error
 }
 
@@ -41,7 +42,7 @@ func (osFs) Create(name string) (File, error) {
 	return os.Create(name)
 }
 
-func (osFs) MkdirAll(path string, perm os.FileMode) error {
+func (osFs) MkdirAll(path string, perm fs.FileMode) error {
 	return os.MkdirAll(path, perm)
 }
 
@@ -49,11 +50,11 @@ func (osFs) Open(name string) (File, error) {
 	return os.Open(name)
 }
 
-func (osFs) OpenFile(name string, flag int, perm os.FileMode) (File, error) {
+func (osFs) OpenFile(name string, flag int, perm fs.FileMode) (File, error) {
 	return os.OpenFile(name, flag, perm)
 }
 
-func (osFs) Stat(name string) (os.FileInfo, error) {
+func (osFs) Stat(name string) (fs.FileInfo, error) {
 	return os.Stat(name)
 }
 
@@ -63,6 +64,7 @@ func (osFs) Symlink(oldName, newName string) error {
 
 type fsKey struct{}
 
+// WithFS assigns the FileSystem to be used by subsequent file system related dos functions
 func WithFS(ctx context.Context, fs FileSystem) context.Context {
 	return context.WithValue(ctx, fsKey{}, fs)
 }
@@ -74,36 +76,39 @@ func getFS(ctx context.Context) FileSystem {
 	return osFs{}
 }
 
+// Create is like os.Create but delegates to the context's FS
 func Create(ctx context.Context, name string) (File, error) {
 	return getFS(ctx).Create(name)
 }
 
-func MkdirAll(ctx context.Context, path string, perm os.FileMode) error {
+// MkdirAll is like os.MkdirAll but delegates to the context's FS
+func MkdirAll(ctx context.Context, path string, perm fs.FileMode) error {
 	return getFS(ctx).MkdirAll(path, perm)
 }
 
+// Open is like os.Open but delegates to the context's FS
 func Open(ctx context.Context, name string) (File, error) {
 	return getFS(ctx).Open(name)
 }
 
-func OpenFile(ctx context.Context, name string, flag int, perm os.FileMode) (File, error) {
+// OpenFile is like os.OpenFile but delegates to the context's FS
+func OpenFile(ctx context.Context, name string, flag int, perm fs.FileMode) (File, error) {
 	return getFS(ctx).OpenFile(name, flag, perm)
 }
 
-func Stat(ctx context.Context, name string) (os.FileInfo, error) {
+// Stat is like os.Stat but delegates to the context's FS
+func Stat(ctx context.Context, name string) (fs.FileInfo, error) {
 	return getFS(ctx).Stat(name)
 }
 
+// Symlink is like os.Symlink but delegates to the context's FS
 func Symlink(ctx context.Context, oldName, newName string) error {
 	return getFS(ctx).Symlink(oldName, newName)
 }
 
-// ReadFile reads the named file and returns the contents.
-// A successful call returns err == nil, not err == EOF.
-// Because ReadFile reads the whole file, it does not treat an EOF from Read
-// as an error to be reported.
-// MODIFIED: This function is a verbatim copy of Golang 1.17.6 os.ReadFile in src/os/file.go,
-// MODIFIED: except for lines marked "MODIFIED".
+// ReadFile is like os.ReadFile but delegates to the context's FS
+// This function is a verbatim copy of Golang 1.17.6 os.ReadFile in src/os/file.go,
+// except for lines marked "MODIFIED".
 func ReadFile(ctx context.Context, name string) ([]byte, error) { // MODIFIED
 	f, err := Open(ctx, name) // MODIFIED
 	if err != nil {
@@ -131,7 +136,8 @@ func ReadFile(ctx context.Context, name string) ([]byte, error) { // MODIFIED
 	data := make([]byte, 0, size)
 	for {
 		if len(data) >= cap(data) {
-			d := append(data[:cap(data)], 0)
+			d := data[:cap(data)] // MODIFIED split in two lines to satisfy gocritic lint complaint
+			d = append(d, 0)      // MODIFIED
 			data = d[:len(data)]
 		}
 		n, err := f.Read(data[len(data):cap(data)])

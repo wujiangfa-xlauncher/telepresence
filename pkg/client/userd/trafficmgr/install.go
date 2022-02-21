@@ -35,7 +35,7 @@ type installer struct {
 type Installer interface {
 	EnsureAgent(c context.Context,
 		obj k8sapi.Workload,
-		config *ServiceProps,
+		config *serviceProps,
 		agentImageName string,
 		telepresenceAPIPort uint16,
 	) (string, string, error)
@@ -276,15 +276,8 @@ func useAutoInstall(podTpl *core.PodTemplateSpec) (bool, error) {
 	return !(webhookInjected || manuallyManaged), nil
 }
 
-type ServiceProps struct {
-	Service            *core.Service
-	ServicePort        *core.ServicePort
-	Container          *core.Container
-	ContainerPortIndex int
-}
-
 // exploreSvc finds the matching service, its containers, and their ports
-func exploreSvc(c context.Context, portNameOrNumber, svcName string, obj k8sapi.Workload) (*ServiceProps, error) {
+func exploreSvc(c context.Context, portNameOrNumber, svcName string, obj k8sapi.Workload) (*serviceProps, error) {
 	podTemplate := obj.GetPodTemplate()
 	cns := podTemplate.Spec.Containers
 	namespace := obj.GetNamespace()
@@ -310,11 +303,12 @@ already exist for this service`, kind, name)
 		return nil, errors.Wrap(err, msg)
 	}
 
-	return &ServiceProps{
-		Service:            matchingSvc,
-		ServicePort:        servicePort,
-		Container:          container,
-		ContainerPortIndex: containerPortIndex,
+	return &serviceProps{
+		service:            matchingSvc,
+		servicePort:        servicePort,
+		workload:           obj,
+		container:          container,
+		containerPortIndex: containerPortIndex,
 	}, nil
 }
 
@@ -325,7 +319,7 @@ already exist for this service`, kind, name)
 func (ki *installer) EnsureAgent(
 	c context.Context,
 	obj k8sapi.Workload,
-	svcprops *ServiceProps,
+	svcProps *serviceProps,
 	agentImageName string,
 	telepresenceAPIPort uint16,
 ) (string, string, error) {
@@ -343,11 +337,11 @@ func (ki *installer) EnsureAgent(
 	}
 
 	if !autoInstall {
-		err := ki.ensureInjectedAgent(c, svcprops.Service, name, namespace, podTemplate, obj)
+		err := ki.ensureInjectedAgent(c, svcProps.service, name, namespace, podTemplate, obj)
 		if err != nil {
 			return "", "", err
 		}
-		return string(svcprops.Service.GetUID()), kind, nil
+		return string(svcProps.service.GetUID()), kind, nil
 	}
 
 	var agentContainer *core.Container
@@ -364,7 +358,7 @@ func (ki *installer) EnsureAgent(
 	switch {
 	case agentContainer == nil:
 		dlog.Infof(c, "no agent found for %s %s.%s", kind, name, namespace)
-		obj, svc, updateSvc, err = addAgentToWorkload(c, svcprops, agentImageName, ki.GetManagerNamespace(), telepresenceAPIPort, obj)
+		obj, updateSvc, err = addAgentToWorkload(c, svcProps, agentImageName, ki.GetManagerNamespace(), telepresenceAPIPort, obj)
 		if err != nil {
 			return "", "", err
 		}
@@ -586,29 +580,28 @@ func undoServiceMods(c context.Context, svc k8sapi.Object) error {
 // prepares and performs modifications to the obj and/or service.
 func addAgentToWorkload(
 	c context.Context,
-	svcprops *ServiceProps,
+	svcProps *serviceProps,
 	agentImageName string,
 	trafficManagerNamespace string,
 	telepresenceAPIPort uint16,
 	object k8sapi.Workload,
 ) (
 	k8sapi.Workload,
-	k8sapi.Object,
 	bool,
 	error,
 ) {
-	matchingService := svcprops.Service
-	container := svcprops.Container
-	servicePort := svcprops.ServicePort
-	containerPortIndex := svcprops.ContainerPortIndex
+	matchingService := svcProps.service
+	container := svcProps.container
+	servicePort := svcProps.servicePort
+	containerPortIndex := svcProps.containerPortIndex
 
 	dlog.Debugf(c, "using service %q port %q when intercepting %s %s",
 		matchingService.Name,
 		func() string {
-			if svcprops.ServicePort.Name != "" {
-				return svcprops.ServicePort.Name
+			if svcProps.servicePort.Name != "" {
+				return svcProps.servicePort.Name
 			}
-			return strconv.Itoa(int(svcprops.ServicePort.Port))
+			return strconv.Itoa(int(svcProps.servicePort.Port))
 		}(),
 		object.GetKind(),
 		nameAndNamespace(object))
@@ -653,7 +646,7 @@ func addAgentToWorkload(
 		}
 	}
 	if containerPort.Number == 0 {
-		return nil, nil, false, k8sapi.ObjErrorf(object, "unable to add: the container port cannot be determined")
+		return nil, false, k8sapi.ObjErrorf(object, "unable to add: the container port cannot be determined")
 	}
 	if containerPort.Name == "" {
 		containerPort.Name = fmt.Sprintf("tx-%d", containerPort.Number)
@@ -738,7 +731,7 @@ func addAgentToWorkload(
 	// Apply the actions on the workload.
 	var err error
 	if err = workloadMod.Do(object); err != nil {
-		return nil, nil, false, err
+		return nil, false, err
 	}
 	mObj := object.(meta.ObjectMetaAccessor).GetObjectMeta()
 	annotations := mObj.GetAnnotations()
@@ -747,7 +740,7 @@ func addAgentToWorkload(
 	}
 	annotations[annTelepresenceActions], err = workloadMod.MarshalAnnotation()
 	if err != nil {
-		return nil, nil, false, err
+		return nil, false, err
 	}
 	mObj.SetAnnotations(annotations)
 	explainDo(c, workloadMod, object)
@@ -757,20 +750,20 @@ func addAgentToWorkload(
 	svc := k8sapi.Service(matchingService)
 	if serviceMod != nil {
 		if err = serviceMod.Do(svc); err != nil {
-			return nil, nil, false, err
+			return nil, false, err
 		}
 		if matchingService.Annotations == nil {
 			matchingService.Annotations = make(map[string]string)
 		}
 		matchingService.Annotations[annTelepresenceActions], err = serviceMod.MarshalAnnotation()
 		if err != nil {
-			return nil, nil, false, err
+			return nil, false, err
 		}
 		explainDo(c, serviceMod, k8sapi.Service(matchingService))
 		updateService = true
 	}
 
-	return object, svc, updateService, nil
+	return object, updateService, nil
 }
 
 func (ki *installer) EnsureManager(c context.Context) error {

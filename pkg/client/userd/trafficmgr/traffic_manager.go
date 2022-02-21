@@ -8,8 +8,11 @@ import (
 	"os"
 	"os/user"
 	"sort"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/blang/semver"
 
 	"github.com/pkg/errors"
 	"google.golang.org/grpc"
@@ -56,7 +59,7 @@ type WatchWorkloadsStream interface {
 type Session interface {
 	restapi.AgentState
 	AddIntercept(context.Context, *rpc.CreateInterceptRequest) (*rpc.InterceptResult, error)
-	CanIntercept(context.Context, *rpc.CreateInterceptRequest) (*rpc.InterceptResult, k8sapi.Workload, *ServiceProps)
+	CanIntercept(context.Context, *rpc.CreateInterceptRequest) (*serviceProps, *rpc.InterceptResult)
 	GetInterceptSpec(string) *manager.InterceptSpec
 	Status(context.Context) *rpc.ConnectInfo
 	IngressInfos(c context.Context) ([]*manager.IngressInfo, error)
@@ -106,6 +109,9 @@ type TrafficManager struct {
 
 	// manager client connection
 	managerConn *grpc.ClientConn
+
+	// version reported by the manager
+	managerVersion semver.Version
 
 	// search paths are propagated to the rootDaemon
 	rootDaemon daemon.DaemonClient
@@ -357,6 +363,15 @@ func connectMgr(c context.Context, cluster *k8s.Cluster, installID string, svc S
 	userAndHost := fmt.Sprintf("%s@%s", userinfo.Username, host)
 	mClient := manager.NewManagerClient(conn)
 
+	vi, err := mClient.Version(tc, &empty.Empty{})
+	if err != nil {
+		return nil, client.CheckTimeout(tc, fmt.Errorf("manager.Version: %w", err))
+	}
+	managerVersion, err := semver.Parse(strings.TrimPrefix(vi.Version, "v"))
+	if err != nil {
+		return nil, client.CheckTimeout(tc, fmt.Errorf("unable to parse manager.Version: %w", err))
+	}
+
 	dlog.Debugf(c, "traffic-manager port-forward established, making client known to the traffic-manager as %q", userAndHost)
 	si, err := mClient.ArriveAsClient(tc, &manager.ClientInfo{
 		Name:      userAndHost,
@@ -376,6 +391,7 @@ func connectMgr(c context.Context, cluster *k8s.Cluster, installID string, svc S
 		getCloudAPIKey:  svc.LoginExecutor().GetCloudAPIKey,
 		managerClient:   mClient,
 		managerConn:     conn,
+		managerVersion:  managerVersion,
 		sessionInfo:     si,
 		rootDaemon:      rootDaemon,
 		localIntercepts: map[string]string{},
