@@ -2,8 +2,8 @@ package state
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -222,24 +222,35 @@ func unmarshalConfigMapEntry(y string, name, namespace string) (*agent.Config, e
 }
 
 // findIntercept finds the intercept configuratin that matches the given InterceptSpec
-func findIntercept(ac *agent.Config, spec *manager.InterceptSpec) (*agent.Container, *agent.Intercept, error) {
+func findIntercept(ac *agent.Config, spec *manager.InterceptSpec) (foundCN *agent.Container, foundIC *agent.Intercept, err error) {
 	for _, cn := range ac.Containers {
 		for _, ic := range cn.Intercepts {
-			if spec.ServiceName != "" && ic.ServiceName != spec.ServiceName {
+			if !agent.SpecMatchesIntercept(spec, ic) {
 				continue
 			}
-			if spec.ServicePortIdentifier != "" {
-				if pn, err := strconv.Atoi(spec.ServicePortIdentifier); err == nil {
-					if ic.AgentPort != int32(pn) {
-						continue
-					}
-				} else if spec.ServicePortIdentifier != ic.ServicePortName {
-					continue
-				}
+			if foundIC != nil {
+				return nil, nil, errors.New("found multiple matching service ports.\n" +
+					"Please specify the Service and/or Service port you want to intercept " +
+					"by passing the --service=<svc> and/or --port=<local:svcPortName> flag.")
 			}
-			return cn, ic, nil
+			foundCN = cn
+			foundIC = ic
 		}
 	}
-	return nil, nil, fmt.Errorf("unable to find intercept for service %q, port %q in agent config %q",
-		spec.ServiceName, spec.ServicePortIdentifier, ac.AgentName)
+	if foundIC == nil {
+		switch {
+		case spec.ServiceName != "" && spec.ServicePortIdentifier != "":
+			err = fmt.Errorf("unable to find intercept for service %q, port %q",
+				spec.ServiceName, spec.ServicePortIdentifier)
+		case spec.ServiceName != "":
+			err = fmt.Errorf("unable to find intercept for service %q",
+				spec.ServiceName)
+		case spec.ServicePortIdentifier != "":
+			err = fmt.Errorf("unable to find intercept for service port %q",
+				spec.ServicePortIdentifier)
+		default:
+			err = errors.New("unable to find intercept")
+		}
+	}
+	return foundCN, foundIC, err
 }

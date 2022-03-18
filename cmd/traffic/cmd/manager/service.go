@@ -731,7 +731,7 @@ func (m *Manager) WatchClusterInfo(session *rpc.SessionInfo, stream rpc.Manager_
 
 func (m *Manager) PrepareIntercept(ctx context.Context, request *rpc.CreateInterceptRequest) (*rpc.PreparedIntercept, error) {
 	ctx = managerutil.WithSessionInfo(ctx, request.Session)
-	dlog.Debugf(ctx, "CreateAgentsConfigMap called")
+	dlog.Debugf(ctx, "PrepareIntercept called")
 	return state.PrepareIntercept(ctx, request)
 }
 

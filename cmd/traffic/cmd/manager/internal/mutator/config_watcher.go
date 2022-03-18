@@ -262,48 +262,44 @@ func (c *configWatcher) Start(ctx context.Context) (modCh <-chan entry, delCh <-
 	c.Unlock()
 
 	api := k8sapi.GetK8sInterface(ctx).CoreV1()
-	do := func(ns string) error {
-		w, err := api.ConfigMaps(ns).Watch(ctx, meta.SingleObject(meta.ObjectMeta{
-			Name: agent.ConfigMap,
-		}))
-		if err != nil {
-			return fmt.Errorf("unable to create watcher: %w", err)
+	do := func(ns string) {
+		dlog.Infof(ctx, "Started watcher for ConfigMap %s.%s", agent.ConfigMap, ns)
+		defer dlog.Infof(ctx, "Ended watcher for ConfigMap %s.%s", agent.ConfigMap, ns)
+
+		// The Watch will perform a http GET call to the kubernetes API server, and that connection will not remain open forever
+		// so when it closes, the watch must start over. This goes on until the context is cancelled.
+		for ctx.Err() == nil {
+			w, err := api.ConfigMaps(ns).Watch(ctx, meta.SingleObject(meta.ObjectMeta{
+				Name: agent.ConfigMap,
+			}))
+			if err != nil {
+				dlog.Errorf(ctx, "unable to create watcher: %v", err)
+				return
+			}
+			if !c.eventHandler(ctx, w.ResultChan()) {
+				return
+			}
 		}
-		go c.eventHandler(ctx, w.ResultChan())
-		return nil
 	}
 
-	ctx, cancel := context.WithCancel(ctx)
-	defer func() {
-		if err != nil {
-			cancel()
-		}
-	}()
-
 	if len(c.namespaces) == 0 {
-		if err = do(""); err != nil {
-			return nil, nil, fmt.Errorf("unable to create watcher: %w", err)
-		}
+		go do("")
 	} else {
 		for _, ns := range c.namespaces {
-			if err = do(ns); err != nil {
-				return nil, nil, fmt.Errorf("unable to create watcher: %w", err)
-			}
+			go do(ns)
 		}
 	}
 	return c.modCh, c.delCh, nil
 }
 
-func (c *configWatcher) eventHandler(ctx context.Context, evCh <-chan watch.Event) {
-	defer dlog.Info(ctx, "Ended")
-	dlog.Info(ctx, "Started")
+func (c *configWatcher) eventHandler(ctx context.Context, evCh <-chan watch.Event) bool {
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return false
 		case event, ok := <-evCh:
 			if !ok {
-				return
+				return true // restart watcher
 			}
 			switch event.Type {
 			case watch.Deleted:

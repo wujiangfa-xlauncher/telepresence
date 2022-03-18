@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/telepresenceio/telepresence/v2/pkg/install/agent"
+
 	"github.com/blang/semver"
 
 	"github.com/datawire/dlib/dlog"
@@ -21,7 +23,7 @@ type State interface {
 
 type SimpleState interface {
 	State
-	AddIntercept(*forwarder.Forwarder, string, map[string]string)
+	AddIntercept(*forwarder.Forwarder, string, *agent.Intercept, map[string]string)
 }
 
 // State of the Traffic Agent.
@@ -33,6 +35,15 @@ type state struct {
 	interceptStates []*interceptState
 }
 
+type interceptState struct {
+	state      *state
+	config     *agent.Intercept
+	forwarder  *forwarder.Forwarder
+	mountPoint string
+	env        map[string]string
+	chosenID   string
+}
+
 func NewState(managerHost, namespace, podIP string, sftpPort int32) SimpleState {
 	return &state{
 		managerHost: managerHost,
@@ -42,8 +53,8 @@ func NewState(managerHost, namespace, podIP string, sftpPort int32) SimpleState 
 	}
 }
 
-func (s *state) AddIntercept(forwarder *forwarder.Forwarder, mountPoint string, env map[string]string) {
-	s.interceptStates = append(s.interceptStates, newInterceptState(s, forwarder, mountPoint, env))
+func (s *state) AddIntercept(forwarder *forwarder.Forwarder, mountPoint string, config *agent.Intercept, env map[string]string) {
+	s.interceptStates = append(s.interceptStates, newInterceptState(s, forwarder, mountPoint, config, env))
 }
 
 func (s *state) AgentState() restapi.AgentState {
@@ -69,22 +80,20 @@ func (s *state) SetManager(sessionInfo *manager.SessionInfo, manager manager.Man
 	}
 }
 
-func (s *state) HandleIntercepts(ctx context.Context, cepts []*manager.InterceptInfo) []*manager.ReviewInterceptRequest {
+func (s *state) HandleIntercepts(ctx context.Context, iis []*manager.InterceptInfo) []*manager.ReviewInterceptRequest {
 	var rs []*manager.ReviewInterceptRequest
 	for _, is := range s.interceptStates {
-		rs = append(rs, is.handleIntercepts(ctx, cepts)...)
+		miis := make([]*manager.InterceptInfo, 0, len(iis))
+		for _, ii := range iis {
+			if agent.SpecMatchesIntercept(ii.Spec, is.config) {
+				dlog.Debugf(ctx, "intercept id %s svc=%q, svcPort=%q matches config svc=%q, svcPort=%d",
+					ii.Id, ii.Spec.ServiceName, ii.Spec.ServicePortIdentifier, is.config.ServiceName, is.config.ServicePort)
+				miis = append(miis, ii)
+			}
+		}
+		rs = append(rs, is.handleIntercepts(ctx, miis)...)
 	}
 	return rs
-}
-
-type interceptState struct {
-	state      *state
-	forwarder  *forwarder.Forwarder
-	appHost    string
-	appPort    int32
-	mountPoint string
-	env        map[string]string
-	chosenID   string
 }
 
 func (s *interceptState) setManager(sessionInfo *manager.SessionInfo, manager manager.ManagerClient, version semver.Version) {
@@ -96,13 +105,11 @@ func (s *interceptState) interceptInfo(ctx context.Context, callerID, path strin
 	return s.forwarder.InterceptInfo(), nil
 }
 
-func newInterceptState(s *state, forwarder *forwarder.Forwarder, mountPoint string, env map[string]string) *interceptState {
-	host, port := forwarder.Target()
+func newInterceptState(s *state, forwarder *forwarder.Forwarder, mountPoint string, config *agent.Intercept, env map[string]string) *interceptState {
 	return &interceptState{
 		state:      s,
+		config:     config,
 		forwarder:  forwarder,
-		appHost:    host,
-		appPort:    port,
 		mountPoint: mountPoint,
 		env:        env,
 	}

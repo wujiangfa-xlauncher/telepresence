@@ -291,7 +291,7 @@ func Main(ctx context.Context, args ...string) error {
 				}
 
 				fwd := forwarder.NewForwarder(lisAddr, "", ic.ContainerPort)
-				state.AddIntercept(fwd, cn.MountPoint, env)
+				state.AddIntercept(fwd, cn.MountPoint, ic, env)
 				g.Go(fmt.Sprintf("forward-%s:%d", cn.Name, ic.ContainerPort), func(ctx context.Context) error {
 					return fwd.Serve(tunnel.WithPool(ctx, tunnel.NewPool()))
 				})
