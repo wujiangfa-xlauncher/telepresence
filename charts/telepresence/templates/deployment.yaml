@@ -70,6 +70,16 @@ spec:
               fieldRef:
                 apiVersion: v1
                 fieldPath: metadata.namespace
+          - name: TELEPRESENCE_MANAGER_POD_IP
+            valueFrom:
+              fieldRef:
+                apiVersion : v1
+                fieldPath: status.podIP
+          - name: TELEPRESENCE_MANAGER_POD_UID
+            valueFrom:
+              fieldRef:
+                apiVersion : v1
+                fieldPath: metadata.uid
           ports:
           - name: api
             containerPort: 8081

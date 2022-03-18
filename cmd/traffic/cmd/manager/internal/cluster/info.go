@@ -36,6 +36,9 @@ type Info interface {
 	// GetTrafficAgentPods acquires all pods that have a `traffic-agent`
 	// container in their spec
 	GetTrafficAgentPods(context.Context, string) ([]*corev1.Pod, error)
+
+	// GetTrafficManagerService returns the service object for the traffic manager
+	GetTrafficManagerService(context.Context) (*corev1.Service, error)
 }
 
 type subnetRetriever interface {
@@ -349,4 +352,14 @@ func (oi *info) GetTrafficManagerPods(ctx context.Context) ([]*corev1.Pod, error
 		}
 	}
 	return tmPods, nil
+}
+
+func (oi *info) GetTrafficManagerService(ctx context.Context) (*corev1.Service, error) {
+	client := k8sapi.GetK8sInterface(ctx).CoreV1()
+	env := managerutil.GetEnv(ctx)
+	svc, err := client.Services(env.ManagerNamespace).Get(ctx, "traffic-manager", metav1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
+	return svc, nil
 }

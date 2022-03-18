@@ -32,6 +32,7 @@ type ManagerClient interface {
 	GetCloudConfig(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*AmbassadorCloudConfig, error)
 	// GetTelepresenceAPI returns information about the TelepresenceAPI server
 	GetTelepresenceAPI(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*TelepresenceAPIInfo, error)
+	GetManagerInfo(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ManagerInfo, error)
 	// ArriveAsClient establishes a session between a client and the Manager.
 	ArriveAsClient(ctx context.Context, in *ClientInfo, opts ...grpc.CallOption) (*SessionInfo, error)
 	// ArriveAsAgent establishes a session between an agent and the Manager.
@@ -159,6 +160,15 @@ func (c *managerClient) GetCloudConfig(ctx context.Context, in *emptypb.Empty, o
 func (c *managerClient) GetTelepresenceAPI(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*TelepresenceAPIInfo, error) {
 	out := new(TelepresenceAPIInfo)
 	err := c.cc.Invoke(ctx, "/telepresence.manager.Manager/GetTelepresenceAPI", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *managerClient) GetManagerInfo(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ManagerInfo, error) {
+	out := new(ManagerInfo)
+	err := c.cc.Invoke(ctx, "/telepresence.manager.Manager/GetManagerInfo", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -584,6 +594,7 @@ type ManagerServer interface {
 	GetCloudConfig(context.Context, *emptypb.Empty) (*AmbassadorCloudConfig, error)
 	// GetTelepresenceAPI returns information about the TelepresenceAPI server
 	GetTelepresenceAPI(context.Context, *emptypb.Empty) (*TelepresenceAPIInfo, error)
+	GetManagerInfo(context.Context, *emptypb.Empty) (*ManagerInfo, error)
 	// ArriveAsClient establishes a session between a client and the Manager.
 	ArriveAsClient(context.Context, *ClientInfo) (*SessionInfo, error)
 	// ArriveAsAgent establishes a session between an agent and the Manager.
@@ -683,6 +694,9 @@ func (UnimplementedManagerServer) GetCloudConfig(context.Context, *emptypb.Empty
 }
 func (UnimplementedManagerServer) GetTelepresenceAPI(context.Context, *emptypb.Empty) (*TelepresenceAPIInfo, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetTelepresenceAPI not implemented")
+}
+func (UnimplementedManagerServer) GetManagerInfo(context.Context, *emptypb.Empty) (*ManagerInfo, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetManagerInfo not implemented")
 }
 func (UnimplementedManagerServer) ArriveAsClient(context.Context, *ClientInfo) (*SessionInfo, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ArriveAsClient not implemented")
@@ -849,6 +863,24 @@ func _Manager_GetTelepresenceAPI_Handler(srv interface{}, ctx context.Context, d
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(ManagerServer).GetTelepresenceAPI(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Manager_GetManagerInfo_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ManagerServer).GetManagerInfo(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/telepresence.manager.Manager/GetManagerInfo",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ManagerServer).GetManagerInfo(ctx, req.(*emptypb.Empty))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1317,6 +1349,10 @@ var Manager_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetTelepresenceAPI",
 			Handler:    _Manager_GetTelepresenceAPI_Handler,
+		},
+		{
+			MethodName: "GetManagerInfo",
+			Handler:    _Manager_GetManagerInfo_Handler,
 		},
 		{
 			MethodName: "ArriveAsClient",

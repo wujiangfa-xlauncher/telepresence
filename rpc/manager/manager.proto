@@ -409,6 +409,18 @@ message ClusterInfo {
   string cluster_domain = 4;
 }
 
+// ManagerInfo contains information about the traffic manager's coordinates within the cluster.
+message ManagerInfo {
+  // pod_ip is the ip of the traffic manager
+  string pod_ip = 1;
+  // svc_ip is the ip of the traffic manager service
+  string svc_ip = 2;
+  // namespace is the namespace within the cluster where the traffic manager is
+  string namespace = 3;
+  // pod_uid is the uid of the manager's pod
+  string pod_uid = 4;
+}
+
 service Manager {
   // Version returns the version information of the Manager.
   rpc Version(google.protobuf.Empty) returns (VersionInfo2);
@@ -427,6 +439,8 @@ service Manager {
 
   // GetTelepresenceAPI returns information about the TelepresenceAPI server
   rpc GetTelepresenceAPI(google.protobuf.Empty) returns (TelepresenceAPIInfo);
+
+  rpc GetManagerInfo(google.protobuf.Empty) returns (ManagerInfo);
 
   // Presence
 

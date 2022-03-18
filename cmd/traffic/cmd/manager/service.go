@@ -728,6 +728,21 @@ func (m *Manager) WatchClusterInfo(session *rpc.SessionInfo, stream rpc.Manager_
 	return m.clusterInfo.Watch(ctx, stream)
 }
 
+func (m *Manager) GetManagerInfo(ctx context.Context, _ *empty.Empty) (*rpc.ManagerInfo, error) {
+	dlog.Debugf(ctx, "GetManagerInfo called")
+	env := managerutil.GetEnv(ctx)
+	svc, err := m.clusterInfo.GetTrafficManagerService(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("unable to get traffic-manager service: %w", err)
+	}
+	return &rpc.ManagerInfo{
+		SvcIp:     svc.Spec.ClusterIP,
+		PodIp:     env.PodIP,
+		PodUid:    env.PodUID,
+		Namespace: env.ManagerNamespace,
+	}, nil
+}
+
 // expire removes stale sessions.
 func (m *Manager) expire(ctx context.Context) {
 	m.state.ExpireSessions(ctx, m.clock.Now().Add(-15*time.Second))

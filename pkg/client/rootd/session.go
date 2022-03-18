@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -125,6 +126,9 @@ type session struct {
 	// Telemetry counters for DNS lookups
 	dnsLookups  int
 	dnsFailures int
+
+	proxyPods bool
+	proxySvcs bool
 }
 
 // connectToManager connects to the traffic-manager and asserts that its version is compatible
@@ -220,6 +224,8 @@ func newSession(c context.Context, scout *scout.Reporter, mi *daemon.OutboundInf
 		clientConn:        conn,
 		alsoProxySubnets:  convertAlsoProxySubnets(c, mi.AlsoProxySubnets),
 		neverProxySubnets: convertNeverProxySubnets(c, mi.NeverProxySubnets),
+		proxyPods:         true,
+		proxySvcs:         true,
 	}
 	s.dnsServer = dns.NewServer(mi.Dns, s.clusterLookup)
 	return s, nil
@@ -401,16 +407,20 @@ func (s *session) onClusterInfo(ctx context.Context, mgrInfo *manager.ClusterInf
 	dlog.Debugf(ctx, "WatchClusterInfo update")
 
 	subnets := make([]*net.IPNet, 0, 1+len(mgrInfo.PodSubnets))
-	if mgrInfo.ServiceSubnet != nil {
-		cidr := iputil.IPNetFromRPC(mgrInfo.ServiceSubnet)
-		dlog.Infof(ctx, "Adding service subnet %s", cidr)
-		subnets = append(subnets, cidr)
+	if s.proxySvcs {
+		if mgrInfo.ServiceSubnet != nil {
+			cidr := iputil.IPNetFromRPC(mgrInfo.ServiceSubnet)
+			dlog.Infof(ctx, "Adding service subnet %s", cidr)
+			subnets = append(subnets, cidr)
+		}
 	}
 
-	for _, sn := range mgrInfo.PodSubnets {
-		cidr := iputil.IPNetFromRPC(sn)
-		dlog.Infof(ctx, "Adding pod subnet %s", cidr)
-		subnets = append(subnets, cidr)
+	if s.proxyPods {
+		for _, sn := range mgrInfo.PodSubnets {
+			cidr := iputil.IPNetFromRPC(sn)
+			dlog.Infof(ctx, "Adding pod subnet %s", cidr)
+			subnets = append(subnets, cidr)
+		}
 	}
 
 	s.clusterSubnets = subnets
@@ -419,10 +429,44 @@ func (s *session) onClusterInfo(ctx context.Context, mgrInfo *manager.ClusterInf
 	}
 }
 
+func (s *session) checkConnectivity(ctx context.Context) error {
+	managerInfo, err := s.managerClient.GetManagerInfo(ctx, &empty.Empty{})
+	if err != nil {
+		return err
+	}
+	shouldProxy := func(ip string, name string, wg *sync.WaitGroup, result *bool) {
+		defer wg.Done()
+		tCtx, tCancel := context.WithTimeout(ctx, 2*time.Second)
+		defer tCancel()
+		conn, err := grpc.DialContext(tCtx, fmt.Sprintf("%s:8081", ip), grpc.WithInsecure(), grpc.WithBlock())
+		if err == nil {
+			defer conn.Close()
+			client := manager.NewManagerClient(conn)
+			info, err := client.GetManagerInfo(tCtx, &empty.Empty{})
+			if err == nil {
+				dlog.Infof(ctx, "Will not proxy %s", name)
+				*result = info.PodUid != managerInfo.PodUid
+			}
+		}
+		dlog.Debugf(ctx, "Will proxy %s", name)
+		*result = true
+	}
+	wg := &sync.WaitGroup{}
+	wg.Add(2)
+	go shouldProxy(managerInfo.PodIp, "pods", wg, &s.proxyPods)
+	go shouldProxy(managerInfo.PodIp, "services", wg, &s.proxySvcs)
+	wg.Wait()
+	return nil
+}
+
 func (s *session) run(c context.Context) error {
 	g := dgroup.NewGroup(c, dgroup.GroupConfig{})
 
 	cfgComplete := make(chan struct{})
+	err := s.checkConnectivity(c)
+	if err != nil {
+		return err
+	}
 	g.Go("watch-cluster-info", func(ctx context.Context) error {
 		s.watchClusterInfo(ctx, cfgComplete)
 		return nil

@@ -28,6 +28,8 @@ type Env struct {
 
 	PodCIDRStrategy string `env:"POD_CIDR_STRATEGY,default=auto"`
 	PodCIDRs        string `env:"POD_CIDRS,default="`
+	PodIP           string `env:"TELEPRESENCE_MANAGER_POD_IP,default="`
+	PodUID          string `env:"TELEPRESENCE_MANAGER_POD_UID,default="`
 }
 
 type envKey struct{}
