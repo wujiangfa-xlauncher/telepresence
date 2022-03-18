@@ -1,13 +1,13 @@
-# The echo-double service exposes two ports, 80 and 81 and directs them to two separate containers
+# The echo-double-one service exposes two ports, 80 and 81 and directs them to one single container
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: "echo-double"
+  name: "echo-double-one"
 spec:
   type: ClusterIP
   selector:
-    service: echo-double
+    service: echo-double-one
   ports:
     - name: http
       port: 80
@@ -19,37 +19,30 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: "echo-double"
+  name: "echo-double-one"
   labels:
-    service: echo-double
+    service: echo-double-one
 spec:
   replicas: 1
   selector:
     matchLabels:
-      service: echo-double
+      service: echo-double-one
   template:
     metadata:
       labels:
-        service: echo-double
+        service: echo-double-one
     spec:
       containers:
-        - name: echo-one
+        - name: echo-double
           image: multi:5000/tel2/echo
           ports:
             - containerPort: 8080
               name: http
-          resources:
-            limits:
-              cpu: 50m
-              memory: 128Mi
-        - name: echo-two
-          image: multi:5000/tel2/echo
-          ports:
             - containerPort: 8081
               name: extra
           env:
-            - name: PORT
-              value: "8081"
+            - name: PORTS
+              value: "8080,8081"
           resources:
             limits:
               cpu: 50m

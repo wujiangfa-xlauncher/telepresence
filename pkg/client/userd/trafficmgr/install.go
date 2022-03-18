@@ -153,6 +153,7 @@ func (ki *installer) rolloutRestart(c context.Context, obj k8sapi.Object) error 
 }
 
 // Finds the Referenced Service in an objects' annotations
+// Deprecated
 func (ki *installer) getSvcFromObjAnnotation(c context.Context, obj k8sapi.Object) (k8sapi.Object, error) {
 	var actions workloadActions
 	annotationsFound, err := getAnnotation(obj, &actions)
@@ -183,6 +184,7 @@ func (ki *installer) getSvcFromObjAnnotation(c context.Context, obj k8sapi.Objec
 // the port to-be-intercepted has changed. It raises an error if either of these
 // cases exist since to go forward with an intercept would require changing the
 // configuration of the agent.
+// Deprecated
 func checkSvcSame(_ context.Context, obj k8sapi.Object, svcName, portNameOrNumber string) error {
 	var actions workloadActions
 	annotationsFound, err := getAnnotation(obj, &actions)
@@ -213,6 +215,7 @@ func checkSvcSame(_ context.Context, obj k8sapi.Object, svcName, portNameOrNumbe
 
 var agentNotFound = errors.New("no such agent")
 
+// Deprecated
 func (ki *installer) ensureInjectedAgent(
 	c context.Context,
 	svc *core.Service,
@@ -265,6 +268,7 @@ nextPod:
 	return nil
 }
 
+// Deprecated
 func useAutoInstall(podTpl *core.PodTemplateSpec) (bool, error) {
 	a := podTpl.ObjectMeta.Annotations
 	webhookInjected := a != nil && a[install.InjectAnnotation] == "enabled"
@@ -277,6 +281,7 @@ func useAutoInstall(podTpl *core.PodTemplateSpec) (bool, error) {
 }
 
 // exploreSvc finds the matching service, its containers, and their ports
+// Deprecated
 func exploreSvc(c context.Context, portNameOrNumber, svcName string, obj k8sapi.Workload) (*serviceProps, error) {
 	podTemplate := obj.GetPodTemplate()
 	cns := podTemplate.Spec.Containers
@@ -316,6 +321,7 @@ already exist for this service`, kind, name)
 // is installed alongside the proper workload. In doing that, it also ensures that
 // the workload is referenced by a service. Lastly, it returns the service UID
 // associated with the workload since this is where that correlation is made.
+// Deprecated
 func (ki *installer) EnsureAgent(
 	c context.Context,
 	obj k8sapi.Workload,
@@ -330,7 +336,6 @@ func (ki *installer) EnsureAgent(
 	rf := reflect.ValueOf(obj).Elem()
 	dlog.Debugf(c, "%s %s.%s %s.%s", kind, name, namespace, rf.Type().PkgPath(), rf.Type().Name())
 
-	var svc k8sapi.Object
 	autoInstall, err := useAutoInstall(podTemplate)
 	if err != nil {
 		return "", "", err
@@ -386,6 +391,7 @@ func (ki *installer) EnsureAgent(
 		update = false
 	}
 
+	svc := k8sapi.Service(svcProps.service)
 	if update {
 		if err = obj.Update(c); err != nil {
 			return "", "", err
@@ -411,6 +417,7 @@ func (ki *installer) EnsureAgent(
 	return string(svc.GetUID()), kind, nil
 }
 
+// Deprecated
 func (ki *installer) waitForApply(c context.Context, name, namespace string, obj k8sapi.Workload) error {
 	tos := &client.GetConfig(c).Timeouts
 	c, cancel := tos.TimeoutContext(c, client.TimeoutApply)
@@ -446,6 +453,7 @@ func (ki *installer) waitForApply(c context.Context, name, namespace string, obj
 // refreshReplicaSet finds pods owned by a given ReplicaSet and deletes them.
 // We need this because updating a Replica Set does *not* generate new
 // pods if the desired amount already exists.
+// Deprecated
 func (ki *installer) refreshReplicaSet(c context.Context, namespace string, rs *apps.ReplicaSet) error {
 	pods, err := k8sapi.Pods(c, namespace, rs.Spec.Selector.MatchLabels)
 	if err != nil {
@@ -471,6 +479,7 @@ func (ki *installer) refreshReplicaSet(c context.Context, namespace string, rs *
 	return nil
 }
 
+// Deprecated
 func getAnnotation(obj k8sapi.Object, data completeAction) (bool, error) {
 	ann := obj.GetAnnotations()
 	if ann == nil {
@@ -501,6 +510,7 @@ func getAnnotation(obj k8sapi.Object, data completeAction) (bool, error) {
 	return true, nil
 }
 
+// Deprecated
 func (ki *installer) undoObjectMods(c context.Context, obj k8sapi.Object) error {
 	referencedService, err := undoObjectMods(c, obj)
 	if err != nil {
@@ -518,6 +528,7 @@ func (ki *installer) undoObjectMods(c context.Context, obj k8sapi.Object) error 
 	return obj.Update(c)
 }
 
+// Deprecated
 func undoObjectMods(c context.Context, obj k8sapi.Object) (string, error) {
 	var actions workloadActions
 	ok, err := getAnnotation(obj, &actions)
@@ -545,6 +556,7 @@ func undoObjectMods(c context.Context, obj k8sapi.Object) (string, error) {
 	return actions.ReferencedService, nil
 }
 
+// Deprecated
 func (ki *installer) undoServiceMods(c context.Context, svc k8sapi.Object) (err error) {
 	if err = undoServiceMods(c, svc); err == nil {
 		err = svc.Update(c)
@@ -552,6 +564,7 @@ func (ki *installer) undoServiceMods(c context.Context, svc k8sapi.Object) (err 
 	return err
 }
 
+// Deprecated
 func undoServiceMods(c context.Context, svc k8sapi.Object) error {
 	var actions svcActions
 	ok, err := getAnnotation(svc, &actions)
@@ -578,6 +591,7 @@ func undoServiceMods(c context.Context, svc k8sapi.Object) error {
 // addAgentToWorkload takes a given workload object and a service and
 // determines which container + port to use for an intercept. It also
 // prepares and performs modifications to the obj and/or service.
+// Deprecated
 func addAgentToWorkload(
 	c context.Context,
 	svcProps *serviceProps,

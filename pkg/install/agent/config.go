@@ -24,9 +24,6 @@ type Intercept struct {
 	// The name of the intercepted container port
 	ContainerPortName string `json:"containerPortName,omitempty" yaml:"containerPortName,omitempty"`
 
-	// The number of the intercepted container port
-	ContainerPort int32 `json:"containerPort,omitempty" yaml:"containerPort,omitempty"`
-
 	// Name of intercepted service
 	ServiceName string `json:"serviceName,omitempty" yaml:"serviceName,omitempty"`
 
@@ -36,20 +33,23 @@ type Intercept struct {
 	// Name of intercepted service port
 	ServicePortName string `json:"servicePortName,omitempty" yaml:"servicePortName,omitempty"`
 
-	// Number of intercepted service port
-	ServicePort int32 `json:"servicePort,omitempty" yaml:"servicePort,omitempty"`
-
-	// True if the service is headless
-	Headless bool `json:"headless,omitempty" yaml:"headless,omitempty"`
-
 	// L4 protocol used by the intercepted port
 	Protocol string `json:"protocol,omitempty" yaml:"protocol,omitempty"`
 
 	// L7 protocol used by the intercepted port
 	AppProtocol string `json:"appProtocol,omitempty" yaml:"appProtocol,omitempty"`
 
+	// True if the service is headless
+	Headless bool `json:"headless,omitempty" yaml:"headless,omitempty"`
+
+	// The number of the intercepted container port
+	ContainerPort uint16 `json:"containerPort,omitempty" yaml:"containerPort,omitempty"`
+
+	// Number of intercepted service port
+	ServicePort uint16 `json:"servicePort,omitempty" yaml:"servicePort,omitempty"`
+
 	// The port number that the agent listens to
-	AgentPort int32 `json:"agentPort,omitempty" yaml:"agentPort,omitempty"`
+	AgentPort uint16 `json:"agentPort,omitempty" yaml:"agentPort,omitempty"`
 }
 
 // Container describes one container that can have one or several intercepts
@@ -100,7 +100,7 @@ type Config struct {
 	ManagerPort int32 `json:"managerPort,omitempty" yaml:"managerPort,omitempty"`
 
 	// The port used by the agents restFUL API server
-	APIPort int32 `json:"apiPort,omitempty" yaml:"apiPort,omitempty"`
+	APIPort uint16 `json:"apiPort,omitempty" yaml:"apiPort,omitempty"`
 
 	// The intercepts managed by the agent
 	Containers []*Container `json:"containers,omitempty" yaml:"containers,omitempty"`

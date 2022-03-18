@@ -40,18 +40,24 @@ func PrepareIntercept(ctx context.Context, cr *manager.CreateInterceptRequest) (
 	if err != nil {
 		return interceptError(err)
 	}
-	_, ic, err := findIntercept(ac, spec)
+	_, ics, err := findIntercepts(ac, spec)
 	if err != nil {
 		return interceptError(err)
 	}
+	svcs := make([]*manager.PreparedIntercept_Service, len(ics))
+	for i, ic := range ics {
+		svcs[i] = &manager.PreparedIntercept_Service{
+			ServiceUid:      string(ic.ServiceUID),
+			ServiceName:     ic.ServiceName,
+			ServicePortName: ic.ServicePortName,
+			ServicePort:     int32(ic.ServicePort),
+		}
+	}
 	return &manager.PreparedIntercept{
-		Namespace:       spec.Namespace,
-		ServiceUid:      string(ic.ServiceUID),
-		ServiceName:     ic.ServiceName,
-		ServicePortName: ic.ServicePortName,
-		ServicePort:     ic.ServicePort,
-		AgentImage:      ac.AgentImage,
-		WorkloadKind:    ac.WorkloadKind,
+		Namespace:    spec.Namespace,
+		Services:     svcs,
+		AgentImage:   ac.AgentImage,
+		WorkloadKind: ac.WorkloadKind,
 	}, nil
 }
 
@@ -221,36 +227,87 @@ func unmarshalConfigMapEntry(y string, name, namespace string) (*agent.Config, e
 	return &conf, nil
 }
 
-// findIntercept finds the intercept configuratin that matches the given InterceptSpec
-func findIntercept(ac *agent.Config, spec *manager.InterceptSpec) (foundCN *agent.Container, foundIC *agent.Intercept, err error) {
-	for _, cn := range ac.Containers {
-		for _, ic := range cn.Intercepts {
-			if !agent.SpecMatchesIntercept(spec, ic) {
-				continue
+// findIntercept finds the intercept configurations that matches the given InterceptSpec's ports
+// The returned slice will have the same length as, and corresponding positions to, the spec's serviceInterceptIdentifier slice
+func findIntercepts(ac *agent.Config, spec *manager.InterceptSpec) (foundCN *agent.Container, foundICs []*agent.Intercept, err error) {
+	spis := spec.ServicePortIdentifiers
+	foundICs = make([]*agent.Intercept, len(spis))
+
+	notFoundCount := 0
+nextSPI:
+	for i, spi := range spis {
+		for _, cn := range ac.Containers {
+			for _, ic := range cn.Intercepts {
+				if !(spec.ServiceName == "" || spec.ServiceName == ic.ServiceName) {
+					continue
+				}
+				if agent.IsInterceptFor(spi, ic) {
+					foundICs[i] = ic
+					if foundCN != nil && foundCN != cn {
+						return nil, nil, errors.New("found multiple matching service ports that spans several containers.\n" +
+							"Please specify the Services and/or Service ports you want to intercept " +
+							"by passing the --service=<svc> and/or --port=<local:svcPortName> flag.")
+					}
+					foundCN = cn
+					continue nextSPI
+				}
 			}
-			if foundIC != nil {
-				return nil, nil, errors.New("found multiple matching service ports.\n" +
-					"Please specify the Service and/or Service port you want to intercept " +
-					"by passing the --service=<svc> and/or --port=<local:svcPortName> flag.")
+		}
+		notFoundCount++
+	}
+
+	// An intercept spec may contain at maximum one intercept that isn't qualified. It will be assigned to the
+	// first unused interface in the found container, or first container with intercepts if none is found yet
+	if notFoundCount == 1 {
+		findUnused := func(cn *agent.Container) bool {
+		nextIC:
+			for _, ic := range foundCN.Intercepts {
+				for _, fis := range foundICs {
+					if ic == fis {
+						// already taken
+						continue nextIC
+					}
+				}
+				for i, fis := range foundICs {
+					if fis == nil {
+						foundICs[i] = ic
+						foundCN = cn
+						notFoundCount--
+						return true
+					}
+				}
 			}
-			foundCN = cn
-			foundIC = ic
+			return false
+		}
+		if foundCN != nil {
+			// Has to be in the same container
+			findUnused(foundCN)
+		} else {
+			for _, cn := range ac.Containers {
+				if findUnused(cn) {
+					break
+				}
+			}
 		}
 	}
-	if foundIC == nil {
+
+	if notFoundCount > 0 {
+		var svcPorts []string
+		for _, si := range spec.ServicePortIdentifiers {
+			if si != "" {
+				svcPorts = append(svcPorts, si)
+			}
+		}
 		switch {
-		case spec.ServiceName != "" && spec.ServicePortIdentifier != "":
-			err = fmt.Errorf("unable to find intercept for service %q, port %q",
-				spec.ServiceName, spec.ServicePortIdentifier)
+		case spec.ServiceName != "" && len(svcPorts) > 0:
+			err = fmt.Errorf("unable to find all intercepts for service %q, ports %v", spec.ServiceName, svcPorts)
 		case spec.ServiceName != "":
-			err = fmt.Errorf("unable to find intercept for service %q",
-				spec.ServiceName)
-		case spec.ServicePortIdentifier != "":
-			err = fmt.Errorf("unable to find intercept for service port %q",
-				spec.ServicePortIdentifier)
+			err = fmt.Errorf("unable to find intercept for service %q", spec.ServiceName)
+		case len(svcPorts) > 0:
+			err = fmt.Errorf("unable to find all intercepts for service ports %v", svcPorts)
 		default:
 			err = errors.New("unable to find intercept")
 		}
 	}
-	return foundCN, foundIC, err
+	return foundCN, foundICs, err
 }

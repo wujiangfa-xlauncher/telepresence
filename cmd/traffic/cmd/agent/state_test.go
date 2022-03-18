@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	agent2 "github.com/telepresenceio/telepresence/v2/pkg/install/agent"
+
 	"github.com/stretchr/testify/assert"
 
 	"github.com/datawire/dlib/dlog"
@@ -37,7 +39,14 @@ func makeFS(t *testing.T) (*forwarder.Forwarder, agent.State) {
 	}, 1*time.Second, 10*time.Millisecond)
 
 	s := agent.NewState(mgrHost, "default", "xyz", 0)
-	s.AddIntercept(f, "/tmp", nil)
+	s.AddIntercept(f, "/tmp", &agent2.Intercept{
+		ContainerPort:   appPort,
+		ServicePortName: "http",
+		ServicePort:     80,
+		Headless:        false,
+		Protocol:        "tcp",
+		AgentPort:       9000,
+	}, nil)
 
 	return f, s
 }

@@ -148,7 +148,7 @@ func scoutInterceptEntries(spec *manager.InterceptSpec, result *rpc.InterceptRes
 	var msg string
 	if result != nil {
 		entries = append(entries,
-			scout.Entry{Key: "service_uid", Value: len(result.ServiceUid)},
+			scout.Entry{Key: "service_uid", Value: len(result.ServiceProps.ServiceUid)},
 			scout.Entry{Key: "workload_kind", Value: len(result.WorkloadKind)},
 		)
 		if result.Error != rpc.InterceptError_UNSPECIFIED {

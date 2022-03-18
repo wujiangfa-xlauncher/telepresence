@@ -299,14 +299,15 @@ type serviceProps struct {
 
 func (s *serviceProps) interceptResult() *rpc.InterceptResult {
 	if s.preparedIntercept != nil {
+		svc := s.preparedIntercept.Services[0]
 		return &rpc.InterceptResult{
-			ServiceUid:   s.preparedIntercept.ServiceUid,
+			ServiceUid:   svc.ServiceUid,
 			WorkloadKind: s.preparedIntercept.WorkloadKind,
 			ServiceProps: &userdaemon.IngressInfoRequest{
-				ServiceUid:            s.preparedIntercept.ServiceUid,
-				ServiceName:           s.preparedIntercept.ServiceName,
-				ServicePortIdentifier: s.preparedIntercept.ServicePortName,
-				ServicePort:           s.preparedIntercept.ServicePort,
+				ServiceUid:            svc.ServiceUid,
+				ServiceName:           svc.ServiceName,
+				ServicePortIdentifier: svc.ServicePortName,
+				ServicePort:           svc.ServicePort,
 				Namespace:             s.preparedIntercept.Namespace,
 			},
 		}
@@ -432,7 +433,7 @@ func legacyCanInterceptEpilog(c context.Context, ir *rpc.CreateInterceptRequest)
 		dlog.Debugf(c, "Using %s flags %v", spec.Mechanism, spec.MechanismArgs)
 	}
 
-	svcProps, err := exploreSvc(c, spec.ServicePortIdentifier, spec.ServiceName, wl)
+	svcProps, err := exploreSvc(c, spec.ServicePortIdentifiers[0], spec.ServiceName, wl)
 	if err != nil {
 		return nil, interceptError(rpc.InterceptError_FAILED_TO_ESTABLISH, err)
 	}
@@ -543,6 +544,12 @@ func (tm *TrafficManager) AddIntercept(c context.Context, ir *rpc.CreateIntercep
 			return result, nil
 		}
 	} else {
+		// Make spec port identifier unambiguous. The Services slice is guaranteed to have the exact same
+		// size and positions as the spec.ServicePortIdentifiers
+		spis := spec.ServicePortIdentifiers
+		for i, s := range svcProps.preparedIntercept.Services {
+			spis[i] = s.ServicePortName
+		}
 		result = svcProps.interceptResult()
 	}
 
@@ -682,7 +689,7 @@ func (tm *TrafficManager) workerPortForwardIntercept(ctx context.Context, pf por
 		IP:   net.IPv4(127, 0, 0, 1),
 		Port: int(pf.Port),
 	}
-	f := forwarder.NewForwarder(&addr, pf.PodIP, pf.Port)
+	f := forwarder.NewForwarder(&addr, pf.PodIP, uint16(pf.Port))
 	err := f.Serve(ctx)
 	if err != nil && ctx.Err() == nil {
 		dlog.Errorf(ctx, "port-forwarder failed with %v", err)

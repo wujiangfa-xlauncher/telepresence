@@ -99,6 +99,26 @@ func FindContainerMatchingPort(port *core.ServicePort, cns []core.Container) (*c
 	return nil, 0
 }
 
+func FindServicesSelecting(c context.Context, namespace string, lbs labels.Labels) ([]k8sapi.Object, error) {
+	ss, err := k8sapi.Services(c, namespace, nil)
+	if err != nil {
+		return nil, err
+	}
+	var ms []k8sapi.Object
+	for _, s := range ss {
+		if sl, err := s.Selector(); err != nil {
+			return nil, err
+		} else if sl != nil {
+			if sl.Matches(lbs) {
+				ms = append(ms, s)
+			}
+		}
+	}
+	return ms, nil
+}
+
+// FindMatchingServices find services matching the arguments
+// Deprecated
 func FindMatchingServices(c context.Context, portNameOrNumber, svcName, namespace string, labels map[string]string) ([]*core.Service, error) {
 	// TODO: Expensive on large clusters but the problem goes away once we move the installer to the traffic-manager
 	si := k8sapi.GetK8sInterface(c).CoreV1().Services(namespace)
@@ -144,24 +164,8 @@ func FindMatchingServices(c context.Context, portNameOrNumber, svcName, namespac
 	return matching, nil
 }
 
-func FindServicesSelecting(c context.Context, namespace string, lbs labels.Labels) ([]k8sapi.Object, error) {
-	ss, err := k8sapi.Services(c, namespace, nil)
-	if err != nil {
-		return nil, err
-	}
-	var ms []k8sapi.Object
-	for _, s := range ss {
-		if sl, err := s.Selector(); err != nil {
-			return nil, err
-		} else if sl != nil {
-			if sl.Matches(lbs) {
-				ms = append(ms, s)
-			}
-		}
-	}
-	return ms, nil
-}
-
+// FindMatchingService find service based on given arguments
+// Deprecated
 func FindMatchingService(c context.Context, portNameOrNumber, svcName, namespace string, labels map[string]string) (*core.Service, error) {
 	matchingSvcs, err := FindMatchingServices(c, portNameOrNumber, svcName, namespace, labels)
 	if err != nil {
@@ -190,6 +194,7 @@ func FindMatchingService(c context.Context, portNameOrNumber, svcName, namespace
 
 // FindMatchingPort finds the matching container associated with portNameOrNumber
 // in the given service.
+// Deprecated
 func FindMatchingPort(cns []core.Container, portNameOrNumber string, svc *core.Service) (
 	sPort *core.ServicePort,
 	cn *core.Container,

@@ -139,12 +139,10 @@ func addSecretsMounts(ctx context.Context, ag *agent.Container) error {
 func AppEnvironment(ctx context.Context, ag *agent.Container) (map[string]string, error) {
 	osEnv := dos.Environ(ctx)
 	prefix := agent.EnvPrefixApp + ag.EnvPrefix
-
-	// Keep track of the prefixed variables separately at first, so that we can
-	// ensure that they have higher precedence.
-	appEnv := make(map[string]string)
 	fullEnv := make(map[string]string, len(osEnv))
 
+	// Add prefixed variables separately last, so that we can
+	// ensure that they have higher precedence.
 	for _, env := range osEnv {
 		if !strings.HasPrefix(env, agent.EnvPrefix) {
 			pair := strings.SplitN(env, "=", 2)
@@ -156,7 +154,6 @@ func AppEnvironment(ctx context.Context, ag *agent.Container) (map[string]string
 			}
 		}
 	}
-
 	for _, env := range osEnv {
 		if strings.HasPrefix(env, prefix) {
 			pair := strings.SplitN(env, "=", 2)
@@ -166,9 +163,7 @@ func AppEnvironment(ctx context.Context, ag *agent.Container) (map[string]string
 			}
 		}
 	}
-	for k, v := range appEnv {
-		fullEnv[k] = v
-	}
+	fullEnv["TELEPRESENCE_CONTAINER"] = ag.Name
 	if len(ag.Mounts) > 0 {
 		fullEnv[agent.EnvInterceptMounts] = strings.Join(ag.Mounts, ":")
 	}
@@ -284,18 +279,19 @@ func Main(ctx context.Context, args ...string) error {
 			if err != nil {
 				return err
 			}
-			for _, ic := range cn.Intercepts {
+			fwds := make([]*forwarder.Forwarder, len(cn.Intercepts))
+			for i, ic := range cn.Intercepts {
 				lisAddr, err := net.ResolveTCPAddr("tcp", fmt.Sprintf(":%d", ic.AgentPort))
 				if err != nil {
 					return err
 				}
-
 				fwd := forwarder.NewForwarder(lisAddr, "", ic.ContainerPort)
-				state.AddIntercept(fwd, cn.MountPoint, ic, env)
+				fwds[i] = fwd
 				g.Go(fmt.Sprintf("forward-%s:%d", cn.Name, ic.ContainerPort), func(ctx context.Context) error {
 					return fwd.Serve(tunnel.WithPool(ctx, tunnel.NewPool()))
 				})
 			}
+			state.AddIntercept(fwds, cn, env)
 		}
 
 		if config.APIPort != 0 {

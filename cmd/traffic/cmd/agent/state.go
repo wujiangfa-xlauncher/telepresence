@@ -23,7 +23,7 @@ type State interface {
 
 type SimpleState interface {
 	State
-	AddIntercept(*forwarder.Forwarder, string, *agent.Intercept, map[string]string)
+	AddIntercept([]*forwarder.Forwarder, *agent.Container, map[string]string)
 }
 
 // State of the Traffic Agent.
@@ -37,8 +37,8 @@ type state struct {
 
 type interceptState struct {
 	state      *state
-	config     *agent.Intercept
-	forwarder  *forwarder.Forwarder
+	config     *agent.Container
+	forwarders []*forwarder.Forwarder
 	mountPoint string
 	env        map[string]string
 	chosenID   string
@@ -53,8 +53,8 @@ func NewState(managerHost, namespace, podIP string, sftpPort int32) SimpleState 
 	}
 }
 
-func (s *state) AddIntercept(forwarder *forwarder.Forwarder, mountPoint string, config *agent.Intercept, env map[string]string) {
-	s.interceptStates = append(s.interceptStates, newInterceptState(s, forwarder, mountPoint, config, env))
+func (s *state) AddIntercept(forwarders []*forwarder.Forwarder, config *agent.Container, env map[string]string) {
+	s.interceptStates = append(s.interceptStates, newInterceptState(s, forwarders, config, env))
 }
 
 func (s *state) AgentState() restapi.AgentState {
@@ -82,35 +82,38 @@ func (s *state) SetManager(sessionInfo *manager.SessionInfo, manager manager.Man
 
 func (s *state) HandleIntercepts(ctx context.Context, iis []*manager.InterceptInfo) []*manager.ReviewInterceptRequest {
 	var rs []*manager.ReviewInterceptRequest
-	for _, is := range s.interceptStates {
+	for _, ist := range s.interceptStates {
 		miis := make([]*manager.InterceptInfo, 0, len(iis))
-		for _, ii := range iis {
-			if agent.SpecMatchesIntercept(ii.Spec, is.config) {
-				dlog.Debugf(ctx, "intercept id %s svc=%q, svcPort=%q matches config svc=%q, svcPort=%d",
-					ii.Id, ii.Spec.ServiceName, ii.Spec.ServicePortIdentifier, is.config.ServiceName, is.config.ServicePort)
-				miis = append(miis, ii)
+		for _, is := range ist.config.Intercepts {
+			for _, ii := range iis {
+				if agent.SpecMatchesIntercept(ii.Spec, is) >= 0 {
+					dlog.Debugf(ctx, "intercept id %s svc=%q, svcPort=%q matches config svc=%q, svcPort=%d",
+						ii.Id, ii.Spec.ServiceName, ii.Spec.ServicePortIdentifier, is.ServiceName, is.ServicePort)
+					miis = append(miis, ii)
+				}
 			}
 		}
-		rs = append(rs, is.handleIntercepts(ctx, miis)...)
+		rs = append(rs, ist.handleIntercepts(ctx, miis)...)
 	}
 	return rs
 }
 
 func (s *interceptState) setManager(sessionInfo *manager.SessionInfo, manager manager.ManagerClient, version semver.Version) {
-	s.forwarder.SetManager(sessionInfo, manager, version)
+	for _, fwd := range s.forwarders {
+		fwd.SetManager(sessionInfo, manager, version)
+	}
 }
 
 func (s *interceptState) interceptInfo(ctx context.Context, callerID, path string, headers http.Header) (*restapi.InterceptInfo, error) {
 	// The OSS agent is either intercepting or it isn't. There's no way to tell what it is that's being intercepted.
-	return s.forwarder.InterceptInfo(), nil
+	return s.forwarders[0].InterceptInfo(), nil
 }
 
-func newInterceptState(s *state, forwarder *forwarder.Forwarder, mountPoint string, config *agent.Intercept, env map[string]string) *interceptState {
+func newInterceptState(s *state, forwarders []*forwarder.Forwarder, config *agent.Container, env map[string]string) *interceptState {
 	return &interceptState{
 		state:      s,
 		config:     config,
-		forwarder:  forwarder,
-		mountPoint: mountPoint,
+		forwarders: forwarders,
 		env:        env,
 	}
 }
@@ -152,8 +155,15 @@ func (s *interceptState) handleIntercepts(ctx context.Context, cepts []*manager.
 		}
 	}
 
-	// Update forwarding
-	s.forwarder.SetIntercepting(activeIntercept)
+	// Update forwarding. Find the respective target ports
+	for _, fwd := range s.forwarders {
+		_, targetPort := fwd.Target()
+		if iceptPort := agent.InterceptPortForContainerPort(activeIntercept.Spec, s.config, targetPort); iceptPort > 0 {
+			fwd.SetIntercepting(activeIntercept, iceptPort)
+		} else {
+			fwd.SetIntercepting(nil, 0)
+		}
+	}
 
 	// Review waiting intercepts
 	reviews := []*manager.ReviewInterceptRequest{}
