@@ -368,7 +368,7 @@ func (tm *TrafficManager) CanIntercept(c context.Context, ir *rpc.CreateIntercep
 		return nil, nil
 	}
 
-	if tm.managerVersion.LT(semver.MustParse("2.6.0-alpha.40")) { // TODO: Change to released version
+	if tm.managerVersion.LT(firstAgentConfigMapVersion) {
 		// fall back traffic-manager behaviour prior to 2.6
 		return legacyCanInterceptEpilog(c, ir)
 	}

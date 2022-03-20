@@ -12,8 +12,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/blang/semver"
+	"github.com/telepresenceio/telepresence/v2/pkg/install/helm"
 
+	errors2 "k8s.io/apimachinery/pkg/api/errors"
+
+	"github.com/blang/semver"
 	"github.com/pkg/errors"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -21,6 +24,7 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 	empty "google.golang.org/protobuf/types/known/emptypb"
 	core "k8s.io/api/core/v1"
+	meta "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/datawire/dlib/dcontext"
@@ -38,6 +42,7 @@ import (
 	"github.com/telepresenceio/telepresence/v2/pkg/client/userd/k8s"
 	"github.com/telepresenceio/telepresence/v2/pkg/dnet"
 	"github.com/telepresenceio/telepresence/v2/pkg/install"
+	"github.com/telepresenceio/telepresence/v2/pkg/install/agent"
 	"github.com/telepresenceio/telepresence/v2/pkg/iputil"
 	"github.com/telepresenceio/telepresence/v2/pkg/k8sapi"
 	"github.com/telepresenceio/telepresence/v2/pkg/matcher"
@@ -162,6 +167,10 @@ type interceptResult struct {
 	intercept *manager.InterceptInfo
 	err       error
 }
+
+// firstAgentConfigMapVersion first version of traffic-manager that uses the agent ConfigMap
+// TODO: Change to released version
+var firstAgentConfigMapVersion = semver.MustParse("2.6.0-alpha.64")
 
 func NewSession(c context.Context, sr *scout.Reporter, cr *rpc.ConnectRequest, svc Service, extraServices []SessionService) (Session, *connector.ConnectInfo) {
 	sr.Report(c, "connect")
@@ -713,6 +722,7 @@ func (tm *TrafficManager) Status(c context.Context) *rpc.ConnectInfo {
 
 // Given a slice of AgentInfo, this returns another slice of agents with one
 // agent per namespace, name pair.
+// Deprecated: not used with traffic-manager versions >= 2.6.0
 func getRepresentativeAgents(_ context.Context, agents []*manager.AgentInfo) []*manager.AgentInfo {
 	type workload struct {
 		name, namespace string
@@ -729,7 +739,8 @@ func getRepresentativeAgents(_ context.Context, agents []*manager.AgentInfo) []*
 	return representativeAgents
 }
 
-func (tm *TrafficManager) Uninstall(c context.Context, ur *rpc.UninstallRequest) (*rpc.UninstallResult, error) {
+// Deprecated: not used with traffic-manager versions >= 2.6.0
+func (tm *TrafficManager) legacyUninstall(c context.Context, ur *rpc.UninstallRequest) (*rpc.UninstallResult, error) {
 	result := &rpc.UninstallResult{}
 	agents := tm.getCurrentAgents()
 
@@ -779,6 +790,141 @@ func (tm *TrafficManager) Uninstall(c context.Context, ur *rpc.UninstallRequest)
 		}
 	}
 	return result, nil
+}
+
+// Uninstall parts or all of Telepresence from the cluster if the client has sufficient credentials to do so.
+//
+// Uninstalling everything requires that the client owns the helm chart installation and has permissions to run
+// a `helm uninstall traffic-manager`.
+//
+// Uninstalling all or specific agents require that the client can get and update the agents ConfigMap.
+func (tm *TrafficManager) Uninstall(ctx context.Context, ur *rpc.UninstallRequest) (*rpc.UninstallResult, error) {
+	if tm.managerVersion.LT(firstAgentConfigMapVersion) {
+		// fall back traffic-manager behaviour prior to 2.6
+		return tm.legacyUninstall(ctx, ur)
+	}
+
+	result := &rpc.UninstallResult{}
+	if ur.UninstallType == rpc.UninstallRequest_EVERYTHING {
+		_ = tm.clearIntercepts(ctx)
+		// Uninstalling using helm chart will roll out all affected pods and remove their respective traffic-agent. This
+		// of course, given that the client has permissions to do that, and the chart is owned by the client.
+		if err := helm.DeleteTrafficManager(ctx, tm.ConfigFlags, tm.GetManagerNamespace(), true); err != nil {
+			result.ErrorText = err.Error()
+			result.ErrorCategory = int32(errcat.User)
+		}
+		return result, nil
+	}
+
+	api := k8sapi.GetK8sInterface(ctx).CoreV1()
+	loadAgentConfigMap := func(ns string) (*core.ConfigMap, *rpc.UninstallResult) {
+		cm, err := api.ConfigMaps(ns).Get(ctx, agent.ConfigMap, meta.GetOptions{})
+		if err != nil {
+			if errors2.IsNotFound(err) {
+				// there are no agents to remove
+				return nil, nil
+			}
+			// TODO: find out if this is due to lack of access credentials and if so, report using errcat.User with more meaningful message
+			return nil, &rpc.UninstallResult{
+				ErrorText:     err.Error(),
+				ErrorCategory: int32(errcat.Unknown),
+			}
+		}
+		return cm, nil
+	}
+
+	updateAgentConfigMap := func(ns string, cm *core.ConfigMap) *rpc.UninstallResult {
+		if _, err := api.ConfigMaps(ns).Update(ctx, cm, meta.UpdateOptions{}); err != nil {
+			return &rpc.UninstallResult{
+				ErrorText:     err.Error(),
+				ErrorCategory: int32(errcat.Unknown),
+			}
+		}
+		return nil
+	}
+
+	// Removal of agents requested. We need the agents ConfigMap in order to do that.
+	// This removal is deliberately done in the client instead of the traffic-manager so that RBAC can be configured
+	// to prevent the clients from doing it.
+	if ur.UninstallType == rpc.UninstallRequest_NAMED_AGENTS {
+		// must have a valid namespace in order to uninstall named agents
+		namespace := tm.ActualNamespace(ur.Namespace)
+		if namespace == "" {
+			// namespace is not mapped
+			return &rpc.UninstallResult{
+				ErrorText:     fmt.Sprintf("namespace %s is not mapped", ur.Namespace),
+				ErrorCategory: int32(errcat.User),
+			}, nil
+		}
+		cm, result := loadAgentConfigMap(namespace)
+		if result != nil || cm == nil {
+			return result, nil
+		}
+		changed := false
+		ics := tm.getCurrentIntercepts()
+		for _, an := range ur.Agents {
+			for _, ic := range ics {
+				if ic.Spec.Namespace == namespace && ic.Spec.Agent == an {
+					_ = tm.RemoveIntercept(ctx, ic.Id)
+					break
+				}
+			}
+			if _, ok := cm.Data[an]; ok {
+				delete(cm.Data, an)
+				changed = true
+			}
+		}
+		if changed {
+			return updateAgentConfigMap(namespace, cm), nil
+		}
+		return nil, nil
+	}
+	if ur.UninstallType != rpc.UninstallRequest_ALL_AGENTS {
+		return nil, status.Error(codes.InvalidArgument, "invalid uninstall request")
+	}
+
+	_ = tm.clearIntercepts(ctx)
+	clearAgentsConfigMap := func(ns string) *rpc.UninstallResult {
+		cm, result := loadAgentConfigMap(ns)
+		if result != nil {
+			return result
+		}
+		if cm == nil {
+			return nil
+		}
+		if aiConfig, ok := cm.Data[agent.InjectorKey]; ok {
+			if len(cm.Data) > 1 {
+				cm.Data = nil
+				cm.Data = map[string]string{agent.InjectorKey: aiConfig}
+				return updateAgentConfigMap(ns, cm)
+			}
+		} else if len(cm.Data) > 0 {
+			cm.Data = nil
+			return updateAgentConfigMap(ns, cm)
+		}
+		return nil
+	}
+
+	if ur.Namespace != "" {
+		namespace := tm.ActualNamespace(ur.Namespace)
+		if namespace == "" {
+			// namespace is not mapped
+			return &rpc.UninstallResult{
+				ErrorText:     fmt.Sprintf("namespace %s is not mapped", ur.Namespace),
+				ErrorCategory: int32(errcat.User),
+			}, nil
+		}
+		return clearAgentsConfigMap(namespace), nil
+	} else {
+		// Load all effected configmaps
+		for _, ns := range tm.GetCurrentNamespaces(true) {
+			result := clearAgentsConfigMap(ns)
+			if result != nil {
+				return result, nil
+			}
+		}
+	}
+	return nil, nil
 }
 
 // getClusterCIDRs finds the service CIDR and the pod CIDRs of all nodes in the cluster

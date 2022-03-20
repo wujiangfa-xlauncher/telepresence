@@ -48,12 +48,12 @@ func Load(ctx context.Context, namespace string) (m Map, err error) {
 	ac := agentInjectorConfig{}
 	cm, err := k8sapi.GetK8sInterface(ctx).CoreV1().ConfigMaps(namespace).Get(ctx, agent.ConfigMap, meta.GetOptions{})
 	if err == nil {
-		if v, ok := cm.Data["agentInjector"]; ok {
+		if v, ok := cm.Data[agent.InjectorKey]; ok {
 			err = decode(v, &ac)
 			if err != nil {
 				return nil, err
 			}
-			dlog.Infof(ctx, "using %q entry from ConfigMap %s", "agentInjector", agent.ConfigMap)
+			dlog.Infof(ctx, "using %q entry from ConfigMap %s", agent.InjectorKey, agent.ConfigMap)
 		}
 	}
 
@@ -296,7 +296,7 @@ func (c *configWatcher) eventHandler(ctx context.Context, evCh <-chan watch.Even
 
 func writeToChan(ctx context.Context, es []entry, ch chan<- entry) {
 	for _, e := range es {
-		if e.name == "agentInjector" {
+		if e.name == agent.InjectorKey {
 			continue
 		}
 		select {
@@ -342,7 +342,7 @@ func (c *configWatcher) DeleteMapsAndRolloutAll(ctx context.Context) {
 	api := k8sapi.GetK8sInterface(ctx).CoreV1()
 	for ns, wlm := range c.data {
 		for k, v := range wlm {
-			if k == "agentInjector" {
+			if k == agent.InjectorKey {
 				continue
 			}
 			e := &entry{name: k, namespace: ns, value: v}
