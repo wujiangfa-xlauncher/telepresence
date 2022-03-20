@@ -1,4 +1,4 @@
-package mutator
+package agentconfig
 
 // CapsBase26 converts the given number into base 26 represented using the letters 'A' to 'Z'
 func CapsBase26(v uint64) string {

@@ -25,7 +25,7 @@ func uninstallCommand() *cobra.Command {
 		Use:  "uninstall [flags] { --agent <agents...> |--all-agents | --everything }",
 		Args: ui.args,
 
-		Short: "Uninstall telepresence agents and manager",
+		Short: "DeleteMaps telepresence agents and manager",
 		RunE:  ui.run,
 	}
 	flags := cmd.Flags()

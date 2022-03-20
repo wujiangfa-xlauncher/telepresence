@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/telepresenceio/telepresence/v2/cmd/traffic/cmd/manager/agentconfig"
+
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -617,7 +619,7 @@ func TestTrafficAgentConfigGenerator(t *testing.T) {
 			var actualConfig *agent.Config
 			wl, actualErr := findOwnerWorkload(ctx, k8sapi.Pod(test.request))
 			if actualErr == nil {
-				actualConfig, actualErr = generateAgentConfig(ctx, wl, &core.PodTemplateSpec{
+				actualConfig, actualErr = agentconfig.Generate(ctx, wl, &core.PodTemplateSpec{
 					ObjectMeta: test.request.ObjectMeta,
 					Spec:       test.request.Spec,
 				})
@@ -1259,7 +1261,7 @@ func TestTrafficAgentInjector(t *testing.T) {
 				ObjectMeta: podObjectMeta("numeric-port"),
 				Spec: core.PodSpec{
 					InitContainers: []core.Container{{
-						Name:  InitContainerName,
+						Name:  agent.InitContainerName,
 						Image: env.AgentRegistry + "/" + env.AgentImage,
 						Args:  []string{"agent-init"},
 						VolumeMounts: []core.VolumeMount{{
@@ -1422,15 +1424,14 @@ func TestTrafficAgentInjector(t *testing.T) {
 			}
 			var actualPatch patchOps
 			var actualErr error
-			cw := newConfigWatch("")
+			cw := agentconfig.NewWatcher("")
 			if test.generateConfig {
 				var wl k8sapi.Workload
 				wl, actualErr = findOwnerWorkload(ctx, k8sapi.Pod(test.pod))
 				if actualErr == nil {
-					cw = newConfigWatch("")
 					var ac *agent.Config
-					if ac, actualErr = generateAgentConfig(ctx, wl, &core.PodTemplateSpec{ObjectMeta: test.pod.ObjectMeta, Spec: test.pod.Spec}); actualErr == nil {
-						actualErr = cw.store(ctx, test.pod.Namespace, ac, true)
+					if ac, actualErr = agentconfig.Generate(ctx, wl, &core.PodTemplateSpec{ObjectMeta: test.pod.ObjectMeta, Spec: test.pod.Spec}); actualErr == nil {
+						actualErr = cw.Store(ctx, test.pod.Namespace, ac, true)
 					}
 				}
 			}

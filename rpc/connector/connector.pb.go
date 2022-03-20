@@ -7,14 +7,16 @@
 package connector
 
 import (
-	common "github.com/telepresenceio/telepresence/rpc/v2/common"
-	manager "github.com/telepresenceio/telepresence/rpc/v2/manager"
-	userdaemon "github.com/telepresenceio/telepresence/rpc/v2/userdaemon"
+	reflect "reflect"
+	sync "sync"
+
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	emptypb "google.golang.org/protobuf/types/known/emptypb"
-	reflect "reflect"
-	sync "sync"
+
+	common "github.com/telepresenceio/telepresence/rpc/v2/common"
+	manager "github.com/telepresenceio/telepresence/rpc/v2/manager"
+	userdaemon "github.com/telepresenceio/telepresence/rpc/v2/userdaemon"
 )
 
 const (
@@ -2591,7 +2593,7 @@ var file_rpc_connector_connector_proto_depIdxs = []int32{
 	13, // 26: telepresence.connector.Connector.CanIntercept:input_type -> telepresence.connector.CreateInterceptRequest
 	13, // 27: telepresence.connector.Connector.CreateIntercept:input_type -> telepresence.connector.CreateInterceptRequest
 	44, // 28: telepresence.connector.Connector.RemoveIntercept:input_type -> telepresence.manager.RemoveInterceptRequest2
-	11, // 29: telepresence.connector.Connector.Uninstall:input_type -> telepresence.connector.UninstallRequest
+	11, // 29: telepresence.connector.Connector.DeleteMaps:input_type -> telepresence.connector.UninstallRequest
 	14, // 30: telepresence.connector.Connector.List:input_type -> telepresence.connector.ListRequest
 	15, // 31: telepresence.connector.Connector.WatchWorkloads:input_type -> telepresence.connector.WatchWorkloadsRequest
 	43, // 32: telepresence.connector.Connector.UserNotifications:input_type -> google.protobuf.Empty
@@ -2613,7 +2615,7 @@ var file_rpc_connector_connector_proto_depIdxs = []int32{
 	18, // 48: telepresence.connector.Connector.CanIntercept:output_type -> telepresence.connector.InterceptResult
 	18, // 49: telepresence.connector.Connector.CreateIntercept:output_type -> telepresence.connector.InterceptResult
 	18, // 50: telepresence.connector.Connector.RemoveIntercept:output_type -> telepresence.connector.InterceptResult
-	12, // 51: telepresence.connector.Connector.Uninstall:output_type -> telepresence.connector.UninstallResult
+	12, // 51: telepresence.connector.Connector.DeleteMaps:output_type -> telepresence.connector.UninstallResult
 	17, // 52: telepresence.connector.Connector.List:output_type -> telepresence.connector.WorkloadInfoSnapshot
 	17, // 53: telepresence.connector.Connector.WatchWorkloads:output_type -> telepresence.connector.WorkloadInfoSnapshot
 	19, // 54: telepresence.connector.Connector.UserNotifications:output_type -> telepresence.connector.Notification

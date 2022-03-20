@@ -147,10 +147,10 @@ func scoutInterceptEntries(spec *manager.InterceptSpec, result *rpc.InterceptRes
 	}
 	var msg string
 	if result != nil {
-		entries = append(entries,
-			scout.Entry{Key: "service_uid", Value: len(result.ServiceProps.ServiceUid)},
-			scout.Entry{Key: "workload_kind", Value: len(result.WorkloadKind)},
-		)
+		entries = append(entries, scout.Entry{Key: "workload_kind", Value: len(result.WorkloadKind)})
+		if result.ServiceProps != nil {
+			entries = append(entries, scout.Entry{Key: "service_uid", Value: len(result.ServiceProps.ServiceUid)})
+		}
 		if result.Error != rpc.InterceptError_UNSPECIFIED {
 			msg = result.Error.String()
 		}
@@ -257,7 +257,7 @@ func (s *service) WatchWorkloads(wr *rpc.WatchWorkloadsRequest, server rpc.Conne
 }
 
 func (s *service) Uninstall(c context.Context, ur *rpc.UninstallRequest) (result *rpc.UninstallResult, err error) {
-	err = s.withSession(c, "Uninstall", func(c context.Context, session trafficmgr.Session) error {
+	err = s.withSession(c, "DeleteMaps", func(c context.Context, session trafficmgr.Session) error {
 		result, err = session.Uninstall(c, ur)
 		return err
 	})

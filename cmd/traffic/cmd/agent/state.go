@@ -158,11 +158,13 @@ func (s *interceptState) handleIntercepts(ctx context.Context, cepts []*manager.
 	// Update forwarding. Find the respective target ports
 	for _, fwd := range s.forwarders {
 		_, targetPort := fwd.Target()
-		if iceptPort := agent.InterceptPortForContainerPort(activeIntercept.Spec, s.config, targetPort); iceptPort > 0 {
-			fwd.SetIntercepting(activeIntercept, iceptPort)
-		} else {
-			fwd.SetIntercepting(nil, 0)
+		if activeIntercept != nil {
+			if iceptPort := agent.InterceptPortForContainerPort(activeIntercept.Spec, s.config, targetPort); iceptPort > 0 {
+				fwd.SetIntercepting(activeIntercept, iceptPort)
+				continue
+			}
 		}
+		fwd.SetIntercepting(nil, 0)
 	}
 
 	// Review waiting intercepts

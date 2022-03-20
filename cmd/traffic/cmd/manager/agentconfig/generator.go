@@ -1,8 +1,9 @@
-package mutator
+package agentconfig
 
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/labels"
@@ -16,7 +17,14 @@ import (
 	"github.com/telepresenceio/telepresence/v2/pkg/k8sapi"
 )
 
-func generateAgentConfig(ctx context.Context, wl k8sapi.Workload, pod *core.PodTemplateSpec) (*agent.Config, error) {
+const (
+	ServicePortAnnotation = agent.DomainPrefix + "inject-service-port"
+	ServiceNameAnnotation = agent.DomainPrefix + "inject-service-name"
+	ManagerAppName        = "traffic-manager"
+	ManagerPortHTTP       = 8081
+)
+
+func Generate(ctx context.Context, wl k8sapi.Workload, pod *core.PodTemplateSpec) (*agent.Config, error) {
 	env := managerutil.GetEnv(ctx)
 	cns := pod.Spec.Containers
 	for i := range cns {
@@ -53,13 +61,13 @@ func generateAgentConfig(ctx context.Context, wl k8sapi.Workload, pod *core.PodT
 
 	ag := &agent.Config{
 		AgentImage:   env.AgentRegistry + "/" + env.AgentImage,
-		AgentName:    agentName(wl),
+		AgentName:    AgentName(wl),
 		Namespace:    wl.GetNamespace(),
 		WorkloadName: wl.GetName(),
 		WorkloadKind: wl.GetKind(),
 		ManagerHost:  ManagerAppName + "." + env.ManagerNamespace,
 		ManagerPort:  ManagerPortHTTP,
-		APIPort:      env.APIPort,
+		APIPort:      uint16(env.APIPort),
 		Containers:   ccs,
 	}
 	return ag, nil
@@ -124,12 +132,12 @@ nextSvcPort:
 			ServiceName:       svc.Name,
 			ServiceUID:        svc.UID,
 			ServicePortName:   port.Name,
-			ServicePort:       port.Port,
+			ServicePort:       uint16(port.Port),
 			Protocol:          string(port.Protocol),
 			AppProtocol:       appProto,
-			AgentPort:         *portNumber,
+			AgentPort:         uint16(*portNumber),
 			ContainerPortName: appPort.Name,
-			ContainerPort:     appPort.ContainerPort,
+			ContainerPort:     uint16(appPort.ContainerPort),
 		}
 		*portNumber++
 
@@ -156,4 +164,16 @@ nextSvcPort:
 		})
 	}
 	return ccs, nil
+}
+
+func AgentName(wl k8sapi.Workload) string {
+	switch wl.GetKind() {
+	case "ReplicaSet":
+		// If it's owned by a replicaset, then it's the same as the deployment e.g. "my-echo-697464c6c5" -> "my-echo"
+		tokens := strings.Split(wl.GetName(), "-")
+		return strings.Join(tokens[:len(tokens)-1], "-")
+	default:
+		// If the pod is owned by a statefulset, or a deployment, the agent's name is the same as the workload's
+		return wl.GetName()
+	}
 }

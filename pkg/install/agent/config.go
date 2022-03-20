@@ -5,6 +5,7 @@ import "k8s.io/apimachinery/pkg/types"
 const (
 	ConfigMap            = "telepresence-agents"
 	ContainerName        = "traffic-agent"
+	InitContainerName    = "tel-agent-init"
 	AnnotationVolumeName = "traffic-annotations"
 	AnnotationMountPoint = "/tel_pod_info"
 	ConfigVolumeName     = "traffic-config"
@@ -17,6 +18,9 @@ const (
 
 	// EnvInterceptMounts mount points propagated to client during intercept
 	EnvInterceptMounts = "TELEPRESENCE_MOUNTS"
+
+	DomainPrefix     = "telepresence.getambassador.io/"
+	InjectAnnotation = DomainPrefix + "inject-" + ContainerName
 )
 
 // Intercept describes the mapping between a service port and an intercepted container port

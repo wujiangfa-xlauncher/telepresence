@@ -6,35 +6,27 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-
-	"github.com/google/go-cmp/cmp/cmpopts"
+	"sync/atomic"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	admission "k8s.io/api/admission/v1"
 	core "k8s.io/api/core/v1"
 	meta "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/datawire/dlib/dlog"
+	"github.com/telepresenceio/telepresence/v2/cmd/traffic/cmd/manager/agentconfig"
 	"github.com/telepresenceio/telepresence/v2/cmd/traffic/cmd/manager/managerutil"
 	"github.com/telepresenceio/telepresence/v2/pkg/install"
 	"github.com/telepresenceio/telepresence/v2/pkg/install/agent"
 	"github.com/telepresenceio/telepresence/v2/pkg/k8sapi"
 )
 
-const (
-	DomainPrefix          = "telepresence.getambassador.io/"
-	InjectAnnotation      = DomainPrefix + "inject-" + agent.ContainerName
-	ServicePortAnnotation = DomainPrefix + "inject-service-port"
-	ServiceNameAnnotation = DomainPrefix + "inject-service-name"
-	ManagerAppName        = "traffic-manager"
-	ManagerPortHTTP       = 8081
-	InitContainerName     = "tel-agent-init"
-)
-
 var podResource = meta.GroupVersionResource{Version: "v1", Group: "", Resource: "pods"}
 
 type agentInjector struct {
-	agentConfigs Map
+	agentConfigs agentconfig.Map
+	terminating  int64
 }
 
 func getPod(req *admission.AdmissionRequest) (*core.Pod, error) {
@@ -70,7 +62,7 @@ func getPod(req *admission.AdmissionRequest) (*core.Pod, error) {
 }
 
 func (a *agentInjector) inject(ctx context.Context, req *admission.AdmissionRequest) (patchOps, error) {
-	if req.Operation == admission.Delete {
+	if atomic.LoadInt64(&a.terminating) > 0 || req.Operation == admission.Delete {
 		return nil, nil
 	}
 
@@ -80,23 +72,27 @@ func (a *agentInjector) inject(ctx context.Context, req *admission.AdmissionRequ
 	}
 
 	var config *agent.Config
-	ia := pod.Annotations[InjectAnnotation]
+	ia := pod.Annotations[agent.InjectAnnotation]
 	switch ia {
 	case "disabled":
-		dlog.Debugf(ctx, `The %s.%s pod is explicitly disabled using a %q annotation; skipping`, pod.Name, pod.Namespace, InjectAnnotation)
+		dlog.Debugf(ctx, `The %s.%s pod is explicitly disabled using a %q annotation; skipping`, pod.Name, pod.Namespace, agent.InjectAnnotation)
 		return nil, nil
 	case "", "enabled":
 		config, err = a.findConfigMapValue(ctx, pod, nil)
 		if err != nil {
+			if strings.Contains(err.Error(), "unsupported workload kind") {
+				// This isn't something that we want to touch
+				err = nil
+			}
 			return nil, err
 		}
 		if config == nil {
 			dlog.Debugf(ctx, `The %s.%s pod has not enabled %s container injection through %q configmap or %q annotation; skipping`,
-				pod.Name, pod.Namespace, agent.ContainerName, agent.ConfigMap, InjectAnnotation)
+				pod.Name, pod.Namespace, agent.ContainerName, agent.ConfigMap, agent.InjectAnnotation)
 			return nil, nil
 		}
 	default:
-		return nil, fmt.Errorf("invalid value %q for annotation %s", ia, InjectAnnotation)
+		return nil, fmt.Errorf("invalid value %q for annotation %s", ia, agent.InjectAnnotation)
 	}
 
 	// Create patch operations to add the traffic-agent sidecar
@@ -119,16 +115,11 @@ func (a *agentInjector) inject(ctx context.Context, req *admission.AdmissionRequ
 	return patches, nil
 }
 
-func agentName(wl k8sapi.Workload) string {
-	switch wl.GetKind() {
-	case "ReplicaSet":
-		// If it's owned by a replicaset, then it's the same as the deployment e.g. "my-echo-697464c6c5" -> "my-echo"
-		tokens := strings.Split(wl.GetName(), "-")
-		return strings.Join(tokens[:len(tokens)-1], "-")
-	default:
-		// If the pod is owned by a statefulset, or a deployment, the agent's name is the same as the workload's
-		return wl.GetName()
-	}
+// uninstall ensures that no more webhook injections is made and that all the workloads of currently injected
+// pods are rolled out.
+func (a *agentInjector) uninstall(ctx context.Context) {
+	atomic.StoreInt64(&a.terminating, 1)
+	a.agentConfigs.DeleteMapsAndRolloutAll(ctx)
 }
 
 func needInitContainer(config *agent.Config) bool {
@@ -145,7 +136,7 @@ func needInitContainer(config *agent.Config) bool {
 func addInitContainer(ctx context.Context, pod *core.Pod, config *agent.Config, patches patchOps) patchOps {
 	if !needInitContainer(config) {
 		for i, oc := range pod.Spec.InitContainers {
-			if InitContainerName == oc.Name {
+			if agent.InitContainerName == oc.Name {
 				return append(patches, patchOperation{
 					Op:   "remove",
 					Path: fmt.Sprintf("/spec/initContainers/%d", i),
@@ -157,7 +148,7 @@ func addInitContainer(ctx context.Context, pod *core.Pod, config *agent.Config, 
 
 	env := managerutil.GetEnv(ctx)
 	ic := core.Container{
-		Name:  InitContainerName,
+		Name:  agent.InitContainerName,
 		Image: env.AgentRegistry + "/" + env.AgentImage,
 		Args:  []string{"agent-init"},
 		VolumeMounts: []core.VolumeMount{{
@@ -442,9 +433,9 @@ func addPodAnnotations(_ context.Context, pod *core.Pod, patches patchOps) patch
 		am = cm
 	}
 
-	if _, ok := pod.Annotations[InjectAnnotation]; !ok {
+	if _, ok := pod.Annotations[agent.InjectAnnotation]; !ok {
 		changed = true
-		am[InjectAnnotation] = "enabled"
+		am[agent.InjectAnnotation] = "enabled"
 	}
 
 	if changed {
@@ -464,7 +455,7 @@ func (a *agentInjector) findConfigMapValue(ctx context.Context, pod *core.Pod, w
 	var refs []meta.OwnerReference
 	if wl != nil {
 		ag := agent.Config{}
-		ok, err := a.agentConfigs.GetInto(agentName(wl), pod.GetNamespace(), &ag)
+		ok, err := a.agentConfigs.GetInto(agentconfig.AgentName(wl), pod.GetNamespace(), &ag)
 		if err != nil {
 			return nil, err
 		}
@@ -497,7 +488,7 @@ func agentContainer(
 		for _, ic := range cc.Intercepts {
 			ports = append(ports, core.ContainerPort{
 				Name:          ic.ContainerPortName,
-				ContainerPort: ic.AgentPort,
+				ContainerPort: int32(ic.AgentPort),
 				Protocol:      core.Protocol(ic.Protocol),
 			})
 		}

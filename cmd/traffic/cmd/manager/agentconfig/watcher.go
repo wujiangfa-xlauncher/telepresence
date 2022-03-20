@@ -1,4 +1,4 @@
-package mutator
+package agentconfig
 
 import (
 	"bytes"
@@ -7,8 +7,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"k8s.io/apimachinery/pkg/labels"
 
 	"gopkg.in/yaml.v3"
 	core "k8s.io/api/core/v1"
@@ -30,14 +28,16 @@ type agentInjectorConfig struct {
 
 type Map interface {
 	GetInto(string, string, interface{}) (bool, error)
-	Run(ctx context.Context) error
+	Run(context.Context) error
+	Store(context.Context, string, *agent.Config, bool) error
+	DeleteMapsAndRolloutAll(ctx context.Context)
 }
 
 func decode(v string, into interface{}) error {
 	return yaml.NewDecoder(strings.NewReader(v)).Decode(into)
 }
 
-func loadAgentConfigs(ctx context.Context, namespace string) (m Map, err error) {
+func Load(ctx context.Context, namespace string) (m Map, err error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer func() {
 		if err != nil {
@@ -58,7 +58,7 @@ func loadAgentConfigs(ctx context.Context, namespace string) (m Map, err error) 
 	}
 
 	dlog.Infof(ctx, "Loading ConfigMaps from %v", ac.Namespaces)
-	return newConfigWatch(agent.ConfigMap, ac.Namespaces...), nil
+	return NewWatcher(agent.ConfigMap, ac.Namespaces...), nil
 }
 
 func (e *entry) workload(ctx context.Context) (*agent.Config, k8sapi.Workload, error) {
@@ -86,7 +86,7 @@ func triggerRollout(ctx context.Context, wl k8sapi.Workload) {
 	dlog.Infof(ctx, "Successfully rolled out %s.%s", wl.GetName(), wl.GetNamespace())
 }
 
-func newConfigWatch(name string, namespaces ...string) *configWatcher {
+func NewWatcher(name string, namespaces ...string) *configWatcher {
 	return &configWatcher{
 		name:       name,
 		namespaces: namespaces,
@@ -96,6 +96,7 @@ func newConfigWatch(name string, namespaces ...string) *configWatcher {
 
 type configWatcher struct {
 	sync.RWMutex
+	cancel     context.CancelFunc
 	name       string
 	namespaces []string
 	data       map[string]map[string]string
@@ -110,6 +111,7 @@ type entry struct {
 }
 
 func (c *configWatcher) Run(ctx context.Context) error {
+	ctx, c.cancel = context.WithCancel(ctx)
 	addCh, delCh, err := c.Start(ctx)
 	if err != nil {
 		return err
@@ -138,9 +140,9 @@ func (c *configWatcher) Run(ctx context.Context) error {
 				continue
 			}
 			if ac.Create {
-				if ac, err = generateAgentConfig(ctx, wl, wl.GetPodTemplate()); err != nil {
+				if ac, err = Generate(ctx, wl, wl.GetPodTemplate()); err != nil {
 					dlog.Error(ctx, err)
-				} else if err = c.store(ctx, ac.Namespace, ac, false); err != nil {
+				} else if err = c.Store(ctx, ac.Namespace, ac, false); err != nil {
 					dlog.Error(ctx, err)
 				}
 				continue // Calling Store() will generate a new event, so we skip rollout here
@@ -167,7 +169,7 @@ func (c *configWatcher) GetInto(key, ns string, into interface{}) (bool, error) 
 	return true, nil
 }
 
-func (c *configWatcher) store(ctx context.Context, ns string, ac *agent.Config, updateSnapshot bool) error {
+func (c *configWatcher) Store(ctx context.Context, ns string, ac *agent.Config, updateSnapshot bool) error {
 	bf := bytes.Buffer{}
 	if err := yaml.NewEncoder(&bf).Encode(ac); err != nil {
 		return err
@@ -225,34 +227,6 @@ func (c *configWatcher) store(ctx context.Context, ns string, ac *agent.Config, 
 		_, err = api.Update(ctx, cm, meta.UpdateOptions{})
 	}
 	return err
-}
-
-func (c *configWatcher) Uninstall(ctx context.Context) {
-	api := k8sapi.GetK8sInterface(ctx).CoreV1()
-	lbs := labels.Set{
-		"app.kubernetes.io/name":       agent.ConfigMap,
-		"app.kubernetes.io/created-by": "traffic-manager",
-	}
-
-	nss := c.namespaces
-	if len(nss) == 0 {
-		ls, err := api.ConfigMaps("").List(ctx, meta.ListOptions{LabelSelector: lbs.AsSelector().String()})
-		if err == nil {
-			dlog.Errorf(ctx, "unable to list ConfigMap %s: %v", agent.ConfigMap, err)
-		}
-		cns := ls.Items
-		ns := make([]string, len(cns))
-		for i := range cns {
-			ns[i] = cns[i].Namespace
-		}
-	}
-
-	now := meta.NewDeleteOptions(0)
-	for _, ns := range nss {
-		if err := api.ConfigMaps(ns).Delete(ctx, agent.ConfigMap, *now); err != nil {
-			dlog.Errorf(ctx, "unable to delete ConfigMap %s-%s: %v", agent.ConfigMap, ns, err)
-		}
-	}
 }
 
 func (c *configWatcher) Start(ctx context.Context) (modCh <-chan entry, delCh <-chan entry, err error) {
@@ -320,6 +294,19 @@ func (c *configWatcher) eventHandler(ctx context.Context, evCh <-chan watch.Even
 	}
 }
 
+func writeToChan(ctx context.Context, es []entry, ch chan<- entry) {
+	for _, e := range es {
+		if e.name == "agentInjector" {
+			continue
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case ch <- e:
+		}
+	}
+}
+
 func (c *configWatcher) update(ctx context.Context, ns string, m map[string]string) {
 	var dels []entry
 	c.Lock()
@@ -342,19 +329,36 @@ func (c *configWatcher) update(ctx context.Context, ns string, m map[string]stri
 		}
 	}
 	c.Unlock()
+	go writeToChan(ctx, dels, c.delCh)
+	go writeToChan(ctx, mods, c.modCh)
+}
 
-	writeToChan := func(es []entry, ch chan<- entry) {
-		for _, e := range es {
-			if e.name == "agentInjector" {
+func (c *configWatcher) DeleteMapsAndRolloutAll(ctx context.Context) {
+	c.cancel() // No more updates from watcher
+	c.RLock()
+	defer c.RUnlock()
+
+	now := meta.NewDeleteOptions(0)
+	api := k8sapi.GetK8sInterface(ctx).CoreV1()
+	for ns, wlm := range c.data {
+		for k, v := range wlm {
+			if k == "agentInjector" {
 				continue
 			}
-			select {
-			case <-ctx.Done():
-				return
-			case ch <- e:
+			e := &entry{name: k, namespace: ns, value: v}
+			ac, wl, err := e.workload(ctx)
+			if err != nil {
+				dlog.Errorf(ctx, "unable to get workload for %s.%s %s: %v", k, ns, v, err)
+				continue
 			}
+			if ac.Create {
+				// Deleted before it was generated, just ignore
+				continue
+			}
+			triggerRollout(ctx, wl)
+		}
+		if err := api.ConfigMaps(ns).Delete(ctx, agent.ConfigMap, *now); err != nil {
+			dlog.Errorf(ctx, "unable to delete ConfigMap %s-%s: %v", agent.ConfigMap, ns, err)
 		}
 	}
-	go writeToChan(dels, c.delCh)
-	go writeToChan(mods, c.modCh)
 }

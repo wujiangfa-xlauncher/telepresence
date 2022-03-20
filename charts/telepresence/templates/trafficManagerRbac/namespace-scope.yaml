@@ -37,6 +37,7 @@ rules:
   - get
   - watch
   - update
+  - delete
   resourceNames:
   - telepresence-agents
 - apiGroups:

@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/telepresenceio/telepresence/v2/cmd/traffic/cmd/manager/agentconfig"
+
 	admission "k8s.io/api/admission/v1"
 	core "k8s.io/api/core/v1"
 	meta "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -88,12 +90,24 @@ func ServeMutator(ctx context.Context) error {
 			dlog.Errorf(ctx, "could not write response: %v", err)
 		}
 	})
+	mux.HandleFunc("/uninstall", func(w http.ResponseWriter, r *http.Request) {
+		dlog.Debug(ctx, "Received uninstall request...")
+		statusCode, err := serveUninstall(ctx, r, ai.uninstall)
+		if err != nil {
+			dlog.Errorf(ctx, "error handling uninstall request: %v", err)
+			w.WriteHeader(statusCode)
+			w.Write([]byte(err.Error()))
+		} else {
+			dlog.Debug(ctx, "Uninstall request handled successfully")
+			w.WriteHeader(http.StatusOK)
+		}
+	})
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 
 	env := managerutil.GetEnv(ctx)
-	cw, err := loadAgentConfigs(ctx, env.ManagerNamespace)
+	cw, err := agentconfig.Load(ctx, env.ManagerNamespace)
 	if err != nil {
 		return err
 	}
@@ -126,6 +140,19 @@ func isNamespaceOfInterest(ctx context.Context, ns string) bool {
 		}
 	}
 	return true
+}
+
+func serveUninstall(ctx context.Context, r *http.Request, uf func(ctx context.Context)) (int, error) {
+	defer func() {
+		if r := recover(); r != nil {
+			dlog.Errorf(ctx, "%+v", derror.PanicToError(r))
+		}
+	}()
+	if r.Method != http.MethodDelete {
+		return http.StatusMethodNotAllowed, fmt.Errorf("invalid method %s, only DELETE requests are allowed", r.Method)
+	}
+	uf(ctx)
+	return 0, nil
 }
 
 // serveMutatingFunc is a helper function to call a mutatorFunc.

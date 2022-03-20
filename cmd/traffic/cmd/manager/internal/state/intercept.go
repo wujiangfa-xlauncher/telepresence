@@ -21,6 +21,20 @@ import (
 	"github.com/telepresenceio/telepresence/v2/pkg/version"
 )
 
+// PrepareIntercept ensures that the given request can be matched against the intercept configuration of
+// the workload that it references. It returns a PreparedIntercept where all intercepted ports have been
+// qualified with a service name and a service port name.
+//
+// The first step is to find the requested Workload and the agent Config for that workload. This step will
+// create the initial ConfigMap for the namespace if it doesn't exist yet, and also generate the actual
+// intercept config if it doesn't exist.
+//
+// The second step matches all ServicePortIdentifiers in the request to the intercepts of the agent Config
+// and creates a resulting PreparedIntercept with a services array that has the same size and positions as
+// the ServicePortIdentifiers in the request.
+//
+// It's expected that the client that makes the call will update any unqualified service port identifiers
+// with the ones in the returned PreparedIntercept.
 func PrepareIntercept(ctx context.Context, cr *manager.CreateInterceptRequest) (*manager.PreparedIntercept, error) {
 	interceptError := func(err error) (*manager.PreparedIntercept, error) {
 		return &manager.PreparedIntercept{Error: err.Error()}, nil
@@ -233,9 +247,13 @@ func findIntercepts(ac *agent.Config, spec *manager.InterceptSpec) (foundCN *age
 	spis := spec.ServicePortIdentifiers
 	foundICs = make([]*agent.Intercept, len(spis))
 
-	notFoundCount := 0
+	unqualifiedCount := 0
 nextSPI:
 	for i, spi := range spis {
+		if spi == "" {
+			unqualifiedCount++
+			continue
+		}
 		for _, cn := range ac.Containers {
 			for _, ic := range cn.Intercepts {
 				if !(spec.ServiceName == "" || spec.ServiceName == ic.ServiceName) {
@@ -253,26 +271,35 @@ nextSPI:
 				}
 			}
 		}
-		notFoundCount++
+		if spec.ServiceName != "" {
+			return nil, nil, fmt.Errorf("unable to find intercept for service %q, port %s", spec.ServiceName, spi)
+		}
+		return nil, nil, fmt.Errorf("unable to find intercept for service port %s", spi)
 	}
-
-	// An intercept spec may contain at maximum one intercept that isn't qualified. It will be assigned to the
-	// first unused interface in the found container, or first container with intercepts if none is found yet
-	if notFoundCount == 1 {
+	switch unqualifiedCount {
+	case 0:
+		return foundCN, foundICs, err
+	case 1:
+		// An intercept spec may contain at maximum one intercept that isn't qualified. It will be assigned to the
+		// first unused interface with a matching service name, either in the already found container, or in the
+		// first container with intercepts.
 		findUnused := func(cn *agent.Container) bool {
 		nextIC:
-			for _, ic := range foundCN.Intercepts {
+			for _, ic := range cn.Intercepts {
 				for _, fis := range foundICs {
 					if ic == fis {
-						// already taken
+						// already in use
 						continue nextIC
 					}
+				}
+				if spec.ServiceName != "" && spec.ServiceName != ic.ServiceName {
+					continue
 				}
 				for i, fis := range foundICs {
 					if fis == nil {
 						foundICs[i] = ic
 						foundCN = cn
-						notFoundCount--
+						unqualifiedCount--
 						return true
 					}
 				}
@@ -289,25 +316,11 @@ nextSPI:
 				}
 			}
 		}
-	}
-
-	if notFoundCount > 0 {
-		var svcPorts []string
-		for _, si := range spec.ServicePortIdentifiers {
-			if si != "" {
-				svcPorts = append(svcPorts, si)
-			}
+		if unqualifiedCount == 0 {
+			return foundCN, foundICs, err
 		}
-		switch {
-		case spec.ServiceName != "" && len(svcPorts) > 0:
-			err = fmt.Errorf("unable to find all intercepts for service %q, ports %v", spec.ServiceName, svcPorts)
-		case spec.ServiceName != "":
-			err = fmt.Errorf("unable to find intercept for service %q", spec.ServiceName)
-		case len(svcPorts) > 0:
-			err = fmt.Errorf("unable to find all intercepts for service ports %v", svcPorts)
-		default:
-			err = errors.New("unable to find intercept")
-		}
+		return nil, nil, fmt.Errorf("unable to find intercept for service %q", spec.ServiceName)
+	default:
+		return nil, nil, fmt.Errorf("at least %d service ports must be specified", len(spis)-1)
 	}
-	return foundCN, foundICs, err
 }
