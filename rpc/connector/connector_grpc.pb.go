@@ -150,7 +150,7 @@ func (c *connectorClient) RemoveIntercept(ctx context.Context, in *manager.Remov
 
 func (c *connectorClient) Uninstall(ctx context.Context, in *UninstallRequest, opts ...grpc.CallOption) (*UninstallResult, error) {
 	out := new(UninstallResult)
-	err := c.cc.Invoke(ctx, "/telepresence.connector.Connector/DeleteMaps", in, out, opts...)
+	err := c.cc.Invoke(ctx, "/telepresence.connector.Connector/Uninstall", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -413,7 +413,7 @@ func (UnimplementedConnectorServer) RemoveIntercept(context.Context, *manager.Re
 	return nil, status.Errorf(codes.Unimplemented, "method RemoveIntercept not implemented")
 }
 func (UnimplementedConnectorServer) Uninstall(context.Context, *UninstallRequest) (*UninstallResult, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method DeleteMaps not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method Uninstall not implemented")
 }
 func (UnimplementedConnectorServer) List(context.Context, *ListRequest) (*WorkloadInfoSnapshot, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method List not implemented")
@@ -606,7 +606,7 @@ func _Connector_Uninstall_Handler(srv interface{}, ctx context.Context, dec func
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/telepresence.connector.Connector/DeleteMaps",
+		FullMethod: "/telepresence.connector.Connector/Uninstall",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(ConnectorServer).Uninstall(ctx, req.(*UninstallRequest))
@@ -908,7 +908,7 @@ var Connector_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _Connector_RemoveIntercept_Handler,
 		},
 		{
-			MethodName: "DeleteMaps",
+			MethodName: "Uninstall",
 			Handler:    _Connector_Uninstall_Handler,
 		},
 		{

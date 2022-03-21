@@ -257,7 +257,7 @@ func (s *service) WatchWorkloads(wr *rpc.WatchWorkloadsRequest, server rpc.Conne
 }
 
 func (s *service) Uninstall(c context.Context, ur *rpc.UninstallRequest) (result *rpc.UninstallResult, err error) {
-	err = s.withSession(c, "DeleteMaps", func(c context.Context, session trafficmgr.Session) error {
+	err = s.withSession(c, "Uninstall", func(c context.Context, session trafficmgr.Session) error {
 		result, err = session.Uninstall(c, ur)
 		return err
 	})

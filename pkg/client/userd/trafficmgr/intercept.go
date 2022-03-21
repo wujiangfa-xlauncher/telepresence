@@ -284,6 +284,9 @@ type serviceProps struct {
 	// Information provided by the traffic manager as response to the PrepareIntercept call
 	preparedIntercept *manager.PreparedIntercept
 
+	// apiKey if the user is logged in
+	apiKey string
+
 	// Fields below are all deprecated and only used with traffic-manager < 2.6.0
 	// Deprecated
 	service *core.Service
@@ -368,14 +371,22 @@ func (tm *TrafficManager) CanIntercept(c context.Context, ir *rpc.CreateIntercep
 		return nil, nil
 	}
 
+	apiKey, err := tm.getCloudAPIKey(c, a8rcloud.KeyDescAgent(spec), false)
+	if err != nil {
+		if !errors.Is(err, auth.ErrNotLoggedIn) {
+			dlog.Errorf(c, "error getting apiKey for agent: %s", err)
+		}
+	}
+
 	if tm.managerVersion.LT(firstAgentConfigMapVersion) {
 		// fall back traffic-manager behaviour prior to 2.6
-		return legacyCanInterceptEpilog(c, ir)
+		return legacyCanInterceptEpilog(c, ir, apiKey)
 	}
 
 	pi, err := tm.managerClient.PrepareIntercept(c, &manager.CreateInterceptRequest{
 		Session:       tm.session(),
 		InterceptSpec: spec,
+		ApiKey:        apiKey,
 	})
 	if err != nil {
 		return nil, interceptError(rpc.InterceptError_TRAFFIC_MANAGER_ERROR, err)
@@ -391,10 +402,10 @@ func (tm *TrafficManager) CanIntercept(c context.Context, ir *rpc.CreateIntercep
 		}
 		dlog.Debugf(c, "Using %s flags %v", ir.Spec.Mechanism, ir.Spec.MechanismArgs)
 	}
-	return &serviceProps{preparedIntercept: pi}, nil
+	return &serviceProps{preparedIntercept: pi, apiKey: apiKey}, nil
 }
 
-func legacyCanInterceptEpilog(c context.Context, ir *rpc.CreateInterceptRequest) (*serviceProps, *rpc.InterceptResult) {
+func legacyCanInterceptEpilog(c context.Context, ir *rpc.CreateInterceptRequest, apiKey string) (*serviceProps, *rpc.InterceptResult) {
 	spec := ir.Spec
 	wl, err := k8sapi.GetWorkload(c, spec.Agent, spec.Namespace, spec.WorkloadKind)
 	if err != nil {
@@ -437,6 +448,7 @@ func legacyCanInterceptEpilog(c context.Context, ir *rpc.CreateInterceptRequest)
 	if err != nil {
 		return nil, interceptError(rpc.InterceptError_FAILED_TO_ESTABLISH, err)
 	}
+	svcProps.apiKey = apiKey
 	return svcProps, nil
 }
 
@@ -572,13 +584,6 @@ func (tm *TrafficManager) AddIntercept(c context.Context, ir *rpc.CreateIntercep
 			}
 		}()
 	}
-
-	var apiKey string
-	if apiKey, err = tm.getCloudAPIKey(c, a8rcloud.KeyDescAgent(spec), false); err != nil {
-		if !errors.Is(err, auth.ErrNotLoggedIn) {
-			dlog.Errorf(c, "error getting apiKey for agent: %s", err)
-		}
-	}
 	dlog.Debugf(c, "creating intercept %s", spec.Name)
 	tos := &client.GetConfig(c).Timeouts
 	spec.RoundtripLatency = int64(tos.Get(client.TimeoutRoundtripLatency)) * 2 // Account for extra hop
@@ -600,7 +605,7 @@ func (tm *TrafficManager) AddIntercept(c context.Context, ir *rpc.CreateIntercep
 	ii, err = tm.managerClient.CreateIntercept(c, &manager.CreateInterceptRequest{
 		Session:       tm.session(),
 		InterceptSpec: spec,
-		ApiKey:        apiKey,
+		ApiKey:        svcProps.apiKey,
 	})
 	if err != nil {
 		dlog.Debugf(c, "manager responded to CreateIntercept with error %v", err)

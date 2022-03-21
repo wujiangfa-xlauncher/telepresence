@@ -7,6 +7,9 @@ import (
 	"strings"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	"gopkg.in/yaml.v3"
 	core "k8s.io/api/core/v1"
 	errors2 "k8s.io/apimachinery/pkg/api/errors"
@@ -35,10 +38,16 @@ import (
 //
 // It's expected that the client that makes the call will update any unqualified service port identifiers
 // with the ones in the returned PreparedIntercept.
-func PrepareIntercept(ctx context.Context, cr *manager.CreateInterceptRequest) (*manager.PreparedIntercept, error) {
+func (s *State) PrepareIntercept(ctx context.Context, cr *manager.CreateInterceptRequest) (*manager.PreparedIntercept, error) {
 	interceptError := func(err error) (*manager.PreparedIntercept, error) {
+		if _, ok := status.FromError(err); ok {
+			return nil, err
+		}
 		return &manager.PreparedIntercept{Error: err.Error()}, nil
 	}
+
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 
 	spec := cr.InterceptSpec
 	wl, err := k8sapi.GetWorkload(ctx, spec.Agent, spec.Namespace, spec.WorkloadKind)
@@ -66,6 +75,9 @@ func PrepareIntercept(ctx context.Context, cr *manager.CreateInterceptRequest) (
 			ServicePortName: ic.ServicePortName,
 			ServicePort:     int32(ic.ServicePort),
 		}
+	}
+	if err = s.waitForAgent(ctx, ac.AgentName, ac.Namespace); err != nil {
+		return interceptError(err)
 	}
 	return &manager.PreparedIntercept{
 		Namespace:    spec.Namespace,
@@ -204,16 +216,19 @@ func waitForConfigMapUpdate(ctx context.Context, cmAPI v1.ConfigMapInterface, ag
 	}
 	defer wi.Stop()
 
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
 	for {
 		select {
 		case <-ctx.Done():
-			return nil, fmt.Errorf("Watch of ConfigMap  %s[%s]: %w", agent.ConfigMap, agentName, ctx.Err())
+			v := "canceled"
+			c := codes.Canceled
+			if ctx.Err() == context.DeadlineExceeded {
+				v = "timed out"
+				c = codes.DeadlineExceeded
+			}
+			return nil, status.Error(c, fmt.Sprintf("watch of ConfigMap %s[%s]: request %s", agent.ConfigMap, agentName, v))
 		case ev, ok := <-wi.ResultChan():
 			if !ok {
-				return nil, fmt.Errorf("Watch of ConfigMap  %s[%s]: channel closed", agent.ConfigMap, agentName)
+				return nil, status.Error(codes.Canceled, fmt.Sprintf("watch of ConfigMap  %s[%s]: channel closed", agent.ConfigMap, agentName))
 			}
 			if !(ev.Type == watch.Added || ev.Type == watch.Modified) {
 				continue
@@ -229,6 +244,32 @@ func waitForConfigMapUpdate(ctx context.Context, cmAPI v1.ConfigMapInterface, ag
 					}
 				}
 			}
+		}
+	}
+}
+
+func (s *State) waitForAgent(ctx context.Context, name, namespace string) error {
+	snapshotCh := s.WatchAgents(ctx, nil)
+	for {
+		select {
+		case snapshot, ok := <-snapshotCh:
+			if !ok {
+				// The request has been canceled.
+				return status.Error(codes.Canceled, fmt.Sprintf("channel closed while waiting for agent %s.%s to arrive", name, namespace))
+			}
+			for _, a := range snapshot.State {
+				if a.Namespace == namespace && a.Name == name {
+					return nil
+				}
+			}
+		case <-ctx.Done():
+			v := "canceled"
+			c := codes.Canceled
+			if ctx.Err() == context.DeadlineExceeded {
+				v = "timed out"
+				c = codes.DeadlineExceeded
+			}
+			return status.Error(c, fmt.Sprintf("request %s while waiting for agent %s.%s to arrive", v, name, namespace))
 		}
 	}
 }

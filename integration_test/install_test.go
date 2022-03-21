@@ -124,7 +124,7 @@ func (is *installSuite) Test_RemoveManagerAndAgents_canUninstall() {
 	// We want to make sure that we can re-install the agent after it's been uninstalled,
 	// so try to ensureManager again.
 	require.NoError(ti.EnsureManager(ctx))
-	// DeleteMaps the agent one last time -- this should behave the same way as the previous uninstall
+	// Uninstall the agent one last time -- this should behave the same way as the previous uninstall
 	require.NoError(ti.RemoveManagerAndAgents(ctx, false, []*manager.AgentInfo{}))
 }
 

@@ -8,8 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/telepresenceio/telepresence/v2/cmd/traffic/cmd/manager/agentconfig"
-
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -24,6 +22,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	"github.com/datawire/dlib/dlog"
+	"github.com/telepresenceio/telepresence/v2/cmd/traffic/cmd/manager/internal/mutator/agentconfig"
 	"github.com/telepresenceio/telepresence/v2/cmd/traffic/cmd/manager/managerutil"
 	"github.com/telepresenceio/telepresence/v2/pkg/install"
 	"github.com/telepresenceio/telepresence/v2/pkg/install/agent"
